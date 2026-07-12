@@ -79,7 +79,7 @@ bash start_server.sh
 ### 必須パッケージ
 
 ```bash
-pip install fastapi uvicorn httpx pyyaml python-dotenv
+pip install fastapi uvicorn httpx pyyaml python-dotenv ruamel.yaml
 ```
 
 ### オプション

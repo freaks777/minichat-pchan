@@ -3,3 +3,4 @@ uvicorn
 httpx
 pyyaml
 python-dotenv
+ruamel.yaml
