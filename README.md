@@ -75,7 +75,19 @@ bash start_server.sh
 
 - Python 3.11+
 - 対応プロバイダのAPIキー
-- ChromaDB（memory プラグイン使用時のみ。`pip install chromadb`）
+
+### 必須パッケージ
+
+```bash
+pip install fastapi uvicorn httpx pyyaml python-dotenv
+```
+
+### オプション
+
+| パッケージ | 用途 |
+|---|---|
+| `chromadb` | memory プラグイン（長期記憶・ベクトル検索） |
+| `sentence-transformers` | memory プラグイン（埋め込みモデル） |
 
 ## Data & Storage
 
