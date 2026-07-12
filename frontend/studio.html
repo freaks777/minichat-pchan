@@ -140,9 +140,10 @@
     </span>
 
     <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin:12px 0">
-      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)">ファイルから生成</legend>
-      <label data-i18n="labelFreetextPrompt">キャラクター設定ファイル（000_MiyakeAoi_basev2.txt 等を貼り付け）</label>
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)">テキストから生成（貼り付け）</legend>
+      <label data-i18n="labelFreetextPrompt">キャラクター設定文（メモ・プロフィール等を貼り付け、またはファイルからコピー）</label>
       <textarea id="raw-text" placeholder="ここに設定ファイルの内容を貼り付け..." style="min-height:120px"></textarea>
+      <span id="raw-text-count" style="font-size:11px;color:var(--text-dim)"></span>
       <div class="btn-row" style="margin-top:8px">
         <button class="btn btn-primary" onclick="extractFields()" data-i18n="btnExtractFields">テキストからフィールド抽出</button>
       </div>

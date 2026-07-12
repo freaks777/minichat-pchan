@@ -105,6 +105,7 @@ function resetAll() {
     if (el) el.value = "";
   });
   document.getElementById("raw-text").value = "";
+  document.getElementById("raw-text").dispatchEvent(new Event("input"));
   document.getElementById("d-source-dir").value = "";
   document.getElementById("t-persona-id").value = defaultPersonaId();
   document.getElementById("d-persona-id").value = document.getElementById("t-persona-id").value;
@@ -585,6 +586,18 @@ document.addEventListener("DOMContentLoaded", () => {
     testMsg.style.height = "auto";
     testMsg.style.height = Math.min(testMsg.scrollHeight, parseFloat(getComputedStyle(testMsg).lineHeight) * 3 + 16) + "px";
   });
+
+  // raw-text 文字数カウンター
+  const rawText = document.getElementById("raw-text");
+  const rawCount = document.getElementById("raw-text-count");
+  if (rawText && rawCount) {
+    const updateCount = () => {
+      const len = rawText.value.length;
+      rawCount.textContent = len > 0 ? `${len} 文字` : "";
+    };
+    rawText.addEventListener("input", updateCount);
+    updateCount();
+  }
 });
 
 window.addEventListener("beforeunload", (e) => {
