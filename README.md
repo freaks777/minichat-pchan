@@ -95,6 +95,10 @@ pip install fastapi uvicorn httpx pyyaml python-dotenv ruamel.yaml
 
 All providers are configured in `config.default.yaml`, but those without a verified API key are **untested**.
 
+Status は作者環境での動作確認状況です。✅ = 実稼働確認済み、⚠️ = コード対応済みだがAPIキー未取得のため未検証。
+
+Status indicates verification in the author's environment: ✅ = tested, ⚠️ = implemented but API key not available for testing.
+
 | Provider | Interface | Status |
 |---|---|---|
 | OpenRouter | OpenAI-compatible | ✅ Verified |
@@ -102,7 +106,7 @@ All providers are configured in `config.default.yaml`, but those without a verif
 | OpenCode Zen | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | OpenAI | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | Anthropic | Anthropic API | ⚠️ Not tested (requires API key) |
-| Google | Google API | ⚠️ Not tested (requires API key) |
+| Google | Gemini API | ⚠️ Not tested (requires API key) |
 | xAI | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | DeepSeek | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | GLM | OpenAI-compatible | ⚠️ Not tested (requires API key) |
