@@ -1,0 +1,52 @@
+main.py が1626行で突出しています。まずここと、セキュリティ的に気になりやすい箇所(パス操作、認証、シリアライズ、ファイルI/O、CORSなど)を横断的に見ていきます。Good, delete_session はきちんとバリデーション済み。次に `_auto_resume_session` を確認。Good — 127.0.0.1 バインドで CORS ミドルウェアも無し(ローカル専用として妥当)。次に APIキー/secrets の扱い、config.yaml、そして chat_sse (SSE, 一番大きい関数) を確認。`yaml.safe_load` を使用しており安全。次に `/api/config/full` エンドポイントで API キーがフロントに漏れていないか確認します。APIキーは適切にマスクされている。良い設計。次に chat_sse (最大の関数) と、log にAPIキーが漏れていないか確認します。Good、save もvalidate_persona_id適用済み。次に import_persona / validate_files をmain.pyで確認(ZIPアップロード等の危険性)。Good、`escapeHtml`でエスケープ済み(ローカルツールとしては十分)。ここまでで全体像はつかめました。他にmemory/mail/watchdogプラグインを軽く確認し、レビューをまとめます。問題なし。件名・本文は`Header`/`MIMEText`経由で適切にエンコードされ、ヘッダーインジェクションの心配なし。認証情報も環境変数から取得しており平文config埋め込みなし。
+
+全体像が把握できたので、レビューをまとめます。.gitignoreが含まれていない(zipに未同梱)ので、その点は今回判断できません。以上を踏まえてレビューをまとめます。
+
+---
+
+## コードレビュー結果
+
+### 🔴 セキュリティ: session_id のパストラバーサル(要修正)
+
+`_auto_resume_session()`(main.py:929〜、`/api/session/update-message` `/api/session/delete-message` `/api/session/truncate` `/api/chat` から呼ばれる)で、`session_id` がフォーマット検証なしに直接パス構築へ使われています。
+
+```python
+jsonl_path = (
+    BASE_DIR.parent / "sessions" / persona_id /
+    f"{session_id}.jsonl"
+)
+if jsonl_path.exists():
+    history._load_specific(jsonl_path)
+```
+
+`history._load_specific()` は渡されたパスを無条件に読み込むだけで、パスの妥当性チェックはありません。一方、同じ役割の `/api/session/resume` エンドポイントでは
+
+```python
+if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", file_stem):
+    return {"error": "invalid session_id format ..."}
+```
+
+というチェックが入っており、**resume だけ安全で auto-resume 系は素通し**という非対称な状態です。`session_id` に `../../../whatever` のような値を送ると `sessions/persona_id/` の外にある任意の `.jsonl` を読み込ませられます(拡張子は固定なのでファイル全体の任意読み取りではありませんが、既知の `.jsonl` ファイルなら内容が履歴として画面に読み込まれてしまいます)。
+
+**対応案**: `_auto_resume_session` の冒頭で `resume_session` と同じ正規表現チェックを `session_id` にも適用する(共通関数に切り出すと良いです)。persona_id の対策(メモリに記録されている path traversal 修正)と同じ考え方を session_id にも横展開する形です。
+
+### 🟡 設計面での気付き(緊急ではない)
+
+1. **main.py が1626行で肥大化**: 設定API・セッション管理・ペルソナ切替・チャットSSE・ページルーティングが1ファイルに同居しています。core/api.pyやcore/history.pyのように既に分割の型があるので、例えば `routers/config.py` `routers/session.py` `routers/persona_studio.py` `routers/chat.py` に `APIRouter` で切り出すと、今後 `_auto_resume_session` のような重複ロジックの見落としも減らせます(今回の脆弱性もこの一極集中が遠因です)。
+
+2. **`_auto_resume_session` と `resume_session` のロジック重複**: セッション復元処理がほぼ同じ内容で2箇所に実装されており、バリデーション漏れの温床になっています。共通化を推奨します。
+
+3. **secrets プラグインの平文保存**: 設計コメントに明記されている通り意図的な仕様ですが、`secrets.json` がバックアップやGit管理下に紛れ込まないよう `.gitignore` へのパス確認をおすすめします(zipには.gitignoreが含まれていなかったので確認できませんでした)。
+
+4. **`import_persona` / `validate_files` の `source_dir`**: 任意の絶対パスを受け付けますが、ローカル単一ユーザー用途で「ファイルシステムにアクセスできる=フルアクセス権がある」前提なので許容範囲と考えます。ただし将来的にリモートアクセスを想定するなら制限が必要です。
+
+### 🟢 良かった点
+
+- `validate_persona_id`(英数字・ハイフンのみ許可)がほぼ全てのpersona_id系エンドポイントで一貫して適用されており、以前修正されたパストラバーサル対策がしっかり定着しています。
+- APIキーは `/api/config/full` でマスクされ、ログにも出力されない設計。
+- `config.yaml` は `yaml.safe_load` を使用(`yaml.load` の任意コード実行リスクを回避)。
+- CORSミドルウェア未使用+`127.0.0.1`バインドで、ローカル専用アプリとして適切な境界線。
+- フロントの `escapeHtml()` によりチャット表示のXSSは基本的に防止済み。
+- mailプラグインはヘッダーインジェクション対策(`Header`/`formataddr`使用)が適切。
+
+まず優先度高いのは session_id のバリデーション漏れです。修正コードを書きましょうか?(`_auto_resume_session` に正規表現チェックを追加する形で数行の変更で済みます)

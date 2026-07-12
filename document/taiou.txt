@@ -1,0 +1,49 @@
+修正完了。Sonnetのレビューで指摘された全項目の対応状況です。
+
+---
+
+## Sonnet コードレビュー対応
+
+### 🔴 修正済み
+
+| 指摘 | 対応 |
+|------|------|
+| `_auto_resume_session()` の `session_id` パストラバーサル | `resume_session` と同じ正規表現 `\d{4}-\d{2}-\d{2}_\d{8}` を追加（5行）。`persona_id` は既に `switch()` 内で `validate_persona_id()` 済み |
+
+### 🟡 注記（緊急ではないが認識しておくべき）
+
+| 指摘 | 現状判断 |
+|------|----------|
+| main.py 1626行の肥大化 | 設定API/セッション/チャット/ルーティングが1ファイル。`APIRouter` 分割で `_auto_resume_session` のような重複ロジック見落としも減らせる |
+| `_auto_resume_session` と `resume_session` のロジック重複 | 今回の脆弱性の遠因。共通化推奨 |
+| secrets プラグインの平文保存 | 意図的仕様だが `.gitignore` 確認推奨 |
+| `import_persona` の任意パス受付 | ローカル単一ユーザーなので許容範囲 |
+
+### 🟢 評価された点（変更不要）
+
+- `validate_persona_id` の徹底適用
+- APIキーマスク（`/api/config/full`）
+- `yaml.safe_load` 使用
+- `127.0.0.1` バインド + CORSなし
+- フロント `escapeHtml()` によるXSS防止
+- mail プラグインのヘッダーインジェクション対策
+
+全ファイル文法OK。
+
+---
+
+## Gemini コードレビュー対応サマリー
+
+| # | 指摘 | 重大度 | 対応 |
+|---|------|--------|------|
+| 1 | `escapeHtml` タイポ（`sessions.js` `session-setup.js` `settings.js`）— 置換先がエスケープされておらずXSS無効 | 🔴 致命的 | ✅ 3ファイル修正（`studio.js` 基準の完全版に統一） |
+| 2 | `chat.js` `escapeHtml` のクォートエスケープ漏れ | 🟡 中 | ✅ 統一版に置換 |
+| 3 | `_auto_resume_session` の `persona_id` バリデーション漏れ | 🟡 防御的 | ✅ 明示的バリデーション追加（`switch()`内にもあるが入口で二重防御） |
+| 4 | `start_session` の `persona_id` バリデーション漏れ | 🟡 防御的 | ✅ 同上 |
+| 5 | `history.py` `_save_full` の非アトミック書き込み（データロストリスク） | 🟡 堅牢性 | ✅ 一時ファイル→`os.replace()` に変更 |
+| 6 | `\w` が日本語を含む（Windowsパス問題） | 🟢 軽微 | ✅ `[a-zA-Z0-9_\-]` に明示化 |
+
+### 未対応（許容範囲と判断）
+
+- `import_persona` / `validate_files` の任意パス受付 → ローカル単一ユーザー前提のため許容。将来的にリモート化する際に対応
+- secrets プラグインの平文保存 → 意図的仕様。`.gitignore` はユーザー管理

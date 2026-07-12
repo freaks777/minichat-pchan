@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Persona Studio — RP Standalone</title>
+<link rel="stylesheet" href="/frontend/css/style.css">
+</head>
+<body>
+
+<nav id="top-nav">
+  <a href="/sessions" data-i18n="navSessions">セッション</a>
+  <a href="/studio" class="active" data-i18n="navStudio">Studio</a>
+  <a href="/settings" data-i18n="navSettings">設定</a>
+  <span class="nav-spacer"></span>
+  <button id="lang-toggle" onclick="toggleLang()">EN</button>
+</nav>
+
+<div id="studio-ui">
+  <header id="studio-header">
+    <h2 data-i18n="studioTitle">Persona Studio</h2>
+  </header>
+
+  <div class="tab-row">
+    <button class="active" onclick="switchTab('template')" data-i18n="tabTemplate">固定フォーム</button>
+    <button onclick="switchTab('file')" data-i18n="tabFile">ファイル指定</button>
+    <button onclick="switchTab('saved')" data-i18n="tabSaved">ペルソナ一覧</button>
+  </div>
+
+  <div id="action-bar" style="display:none;padding:6px 0;align-items:center;gap:4px">
+    <button class="btn btn-secondary btn-sm" onclick="resetAll()" data-i18n="btnReset">リセット</button>
+    <button class="btn btn-secondary btn-sm" onclick="toggleTestChat()" data-i18n="testChat">テスト</button>
+    <span style="flex:1"></span>
+    <button class="btn btn-primary btn-sm" onclick="saveDraft()" data-i18n="btnSave">保存</button>
+  </div>
+
+  <div class="tab-content active" id="tab-template">
+    <p class="setting-hint" data-i18n="hintTemplate">全RP共通のキャラクター基本設定です。空欄は任意。</p>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetBasic">基本情報</legend>
+      <label data-i18n="fieldPersonaId">ペルソナID <span style="color:var(--error)">*必須</span></label>
+      <input id="t-persona-id" placeholder="my-character">
+      <label data-i18n="fieldName">名前 <span style="color:var(--error)">*必須</span></label>
+      <input id="t-name" placeholder="キャラクター名">
+      <div style="display:flex;gap:8px">
+        <label style="flex:1"><span data-i18n="fieldSex">身体的性別</span>
+          <input id="t-sex" placeholder="男性 / 女性" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldGender">性自認・表現</span>
+          <input id="t-gender" placeholder="男の娘 / 男装 / 中性" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldAge">年齢</span>
+          <input id="t-age" placeholder="21歳 / 20代" style="width:100%"></label>
+      </div>
+      <div style="display:flex;gap:8px">
+        <label style="flex:1"><span data-i18n="fieldBirthday">誕生日</span>
+          <input id="t-birthday" placeholder="7月7日" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldSpecies">種族</span>
+          <input id="t-species" placeholder="人間 / エルフ / 獣人" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldBlood">血液型</span>
+          <input id="t-blood" placeholder="A / B / O / AB" style="width:100%"></label>
+      </div>
+      <div style="display:flex;gap:8px">
+        <label style="flex:1"><span data-i18n="fieldHeight">身長</span>
+          <input id="t-height" placeholder="170cm" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldWeight">体重</span>
+          <input id="t-weight" placeholder="55kg" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldBWH">B / W / H</span>
+          <input id="t-bwh" placeholder="B86 W60 H85" style="width:100%"></label>
+      </div>
+    </fieldset>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetAppearance">外見</legend>
+      <div style="display:flex;gap:8px">
+        <label style="flex:1"><span data-i18n="fieldHair">髪</span>
+          <input id="t-hair" placeholder="黒 / ショート" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldEyes">目</span>
+          <input id="t-eyes" placeholder="茶色 / 切れ長" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldSkin">肌</span>
+          <input id="t-skin" placeholder="色白" style="width:100%"></label>
+      </div>
+      <label data-i18n="fieldClothing">服装スタイル</label>
+      <input id="t-clothing" placeholder="モノトーン / ゆったりしたシルエット">
+    </fieldset>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetPersonality">人物</legend>
+      <label data-i18n="fieldPersonality">性格</label>
+      <textarea id="t-personality" placeholder="冷静、観察好き。感情を表に出さないが内面は..." rows="3"></textarea>
+      <label data-i18n="fieldPrinciples">行動原理・判断基準</label>
+      <textarea id="t-principles" placeholder="暴力より心理戦を選ぶ。約束は必ず守る。嘘は必要なら使う" rows="2"></textarea>
+      <div style="display:flex;gap:8px">
+        <label style="flex:1"><span data-i18n="fieldFirstPerson">一人称</span>
+          <input id="t-firstperson" placeholder="私 / 俺 / 僕" style="width:100%"></label>
+        <label style="flex:1"><span data-i18n="fieldSecondPerson">二人称</span>
+          <input id="t-secondperson" placeholder="君 / あんた / お前" style="width:100%"></label>
+      </div>
+      <label data-i18n="fieldTone">口調</label>
+      <textarea id="t-tone" placeholder="落ち着いた低めの声。丁寧ベース。中性的。語尾の特徴など" rows="2"></textarea>
+      <label data-i18n="fieldSpeechSample">口調サンプル</label>
+      <textarea id="t-speech" placeholder="▼ 通常時&#10;「うん、いいね」&#10;&#10;▼ 感情時&#10;「……帰ってください」" rows="4"></textarea>
+      <label data-i18n="fieldLikes">好き嫌い</label>
+      <textarea id="t-likes" placeholder="好き: 刺身、音楽、散歩 / 嫌い: 虫" rows="2"></textarea>
+      <label data-i18n="fieldHabits">癖・習慣</label>
+      <textarea id="t-habits" placeholder="好きな音に集中する。自炊の習慣。虫が出ると硬直する" rows="2"></textarea>
+    </fieldset>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetPosition">立場</legend>
+      <label data-i18n="fieldOccupation">職業/所属</label>
+      <input id="t-occupation" placeholder="DJ / 学生 / 冒険者 / 騎士">
+      <label data-i18n="fieldSkills">特殊能力/スキル</label>
+      <input id="t-skills" placeholder="観察力、音楽 / 魔法、剣術">
+    </fieldset>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetOther">その他</legend>
+      <label data-i18n="fieldBackground">背景</label>
+      <textarea id="t-background" placeholder="生い立ち・現在の状況・世界観..." rows="3"></textarea>
+      <label data-i18n="fieldForbidden">禁止事項</label>
+      <textarea id="t-forbidden" placeholder="特定の語尾を使わない。キャラを破るな。メタ視点禁止" rows="2"></textarea>
+      <label data-i18n="fieldOpeningScene">開始時の状況</label>
+      <textarea id="t-opening_scene" placeholder="空欄なら自動生成。例: 事務所。夕方。鏡花は窓際のソファで紅茶を飲んでいる。" rows="2"></textarea>
+    </fieldset>
+
+    <label data-i18n="fieldStyle">文体スタイル</label>
+    <select id="t-style-preset" onchange="onStyleChange()">
+      <option value="novel_ai">小説調（AI視点・一人称）</option>
+      <option value="novel_user">小説調・ユーザー視点（三人称）</option>
+      <option value="chat">チャット調（地の文なし）</option>
+      <option value="custom">カスタム...</option>
+    </select>
+    <span id="t-style-custom" style="display:none;gap:4px">
+      <select id="t-viewpoint"><option value="ai_character">AI視点</option><option value="user_character">ユーザー視点</option></select>
+      <select id="t-person"><option value="first">一人称</option><option value="third">三人称</option></select>
+      <select id="t-narration"><option value="true">地の文あり</option><option value="false">地の文なし</option></select>
+    </span>
+
+    <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin:12px 0">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)">ファイルから生成</legend>
+      <label data-i18n="labelFreetextPrompt">キャラクター設定ファイル（000_MiyakeAoi_basev2.txt 等を貼り付け）</label>
+      <textarea id="raw-text" placeholder="ここに設定ファイルの内容を貼り付け..." style="min-height:120px"></textarea>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn-primary" onclick="extractFields()" data-i18n="btnExtractFields">テキストからフィールド抽出</button>
+      </div>
+    </fieldset>
+
+    <fieldset id="extra-sections-area" style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetExtra">自由設定</legend>
+      <p class="setting-hint" data-i18n="hintExtra">固定項目に収まらない情報を自由に追加できます。タイトルは任意です。</p>
+      <div id="extra-sections-list"></div>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="addExtraSection()" style="margin-top:6px" data-i18n="btnAddSection">+ 追加</button>
+    </fieldset>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="generateFromTemplate()" data-i18n="btnGenerate">フォームからSOUL/SKILL生成</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetForm('t')" data-i18n="btnClear">クリア</button>
+    </div>
+  </div>
+
+  <!-- ファイル指定 -->
+  <div class="tab-content" id="tab-file">
+    <label data-i18n="fieldPersonaId">ペルソナID</label>
+    <input id="d-persona-id" placeholder="my-character">
+    <label data-i18n="labelSourceDir">登録元フォルダ</label>
+    <input id="d-source-dir" placeholder="../personas/my-character など">
+    <p class="setting-hint" data-i18n="hintSourceDir">SOUL.md / SKILL.md / style.yaml を含むフォルダのパス。3ファイル揃っていれば即登録、不足分は自動生成します。</p>
+    <div id="file-validation" style="display:none;margin:8px 0;font-size:13px"></div>
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn btn-secondary btn-sm" onclick="validateFiles()" data-i18n="btnValidate">ファイル確認</button>
+      <button class="btn btn-primary" onclick="importPersona()" data-i18n="btnImport">登録</button>
+    </div>
+  </div>
+
+  <!-- ペルソナ一覧 -->
+  <div class="tab-content" id="tab-saved">
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px" data-i18n="savedHint">クリックで読み込み、ダブルクリックで削除</p>
+    <div id="saved-persona-list"></div>
+  </div>
+
+  <div id="status-bar" data-i18n="statusReady">準備完了</div>
+
+  <div id="result-panel" style="display:none;margin-top:12px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+    <div style="display:flex;gap:4px;margin-bottom:8px">
+      <button id="result-tab-soul" class="btn btn-secondary btn-sm active" onclick="switchResultTab('soul')">SOUL.md</button>
+      <button id="result-tab-skill" class="btn btn-secondary btn-sm" onclick="switchResultTab('skill')">SKILL.md</button>
+    </div>
+    <textarea id="result-soul" style="width:100%;min-height:300px;font-size:14px;font-family:Consolas,monospace;padding:12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;resize:vertical"></textarea>
+    <textarea id="result-skill" style="display:none;width:100%;min-height:300px;font-size:14px;font-family:Consolas,monospace;padding:12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;resize:vertical"></textarea>
+  </div>
+</div>
+
+<div class="overlay" id="test-overlay" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px">
+    <span data-i18n="testChat">テスト会話</span>
+    <button class="btn btn-secondary btn-sm" onclick="toggleTestChat()" data-i18n="btnHideEditor">閉じる</button>
+  </div>
+  <div id="test-log" style="flex:1;overflow-y:auto;padding:16px;font-size:14px;line-height:1.7;white-space:pre-wrap"></div>
+  <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--border);background:var(--surface)">
+    <textarea id="test-msg" rows="1" placeholder="テストメッセージを入力..." style="flex:1;resize:none;font:inherit;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;line-height:1.5;max-height:calc(1.5em*3+16px)"></textarea>
+    <button class="btn btn-primary btn-sm" onclick="doTestChat()">送信</button>
+  </div>
+</div>
+
+<div class="overlay" id="loading-overlay" style="display:none">
+  <div class="spinner"></div>
+  <span data-i18n="loadingText">生成中...</span>
+</div>
+
+<div id="toast" class="toast" style="display:none"></div>
+
+<script src="/frontend/js/i18n.js"></script>
+<script src="/frontend/js/studio.js"></script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>設定 — RP Standalone</title>
+<link rel="stylesheet" href="/frontend/css/style.css">
+</head>
+<body>
+
+<nav id="top-nav">
+  <a href="/sessions" data-i18n="navSessions">セッション</a>
+  <a href="/studio" data-i18n="navStudio">Studio</a>
+  <a href="/settings" class="active" data-i18n="navSettings">設定</a>
+  <span class="nav-spacer"></span>
+  <button id="lang-toggle" onclick="toggleLang()">EN</button>
+</nav>
+
+<div id="settings-ui">
+  <header id="settings-header">
+    <h1 data-i18n="settingsTitle">設定</h1>
+  </header>
+
+  <div class="settings-tabs">
+    <button class="tab-btn active" data-tab="provider" onclick="showTab('provider')" data-i18n="tabProvider">プロバイダ / モデル</button>
+    <button class="tab-btn" data-tab="watchdog" onclick="showTab('watchdog')" data-i18n="tabWatchdog">Watchdog</button>
+    <button class="tab-btn" data-tab="style" onclick="showTab('style')" data-i18n="tabStyle">文体 / スタイル</button>
+    <button class="tab-btn" data-tab="advanced" onclick="showTab('advanced')" data-i18n="tabAdvanced">詳細</button>
+  </div>
+
+  <!-- Tab: Provider / Model -->
+  <div id="tab-provider" class="tab-panel active">
+    <section class="settings-section">
+      <h2 data-i18n="secProvider">プロバイダ選択</h2>
+      <div class="setting-row">
+        <label data-i18n="labelProvider">プロバイダ</label>
+        <select id="provider-select" onchange="onProviderChange()"></select>
+      </div>
+      <p class="setting-hint model-list-hint">選択中のプロバイダで利用可能なモデル一覧です。編集後に「適用」を押すと保存されます。</p>
+      <div class="setting-row">
+        <label data-i18n="labelModel">モデル (1行1つ)</label>
+        <textarea id="model-textarea" rows="5" class="model-textarea" oninput="onModelTextareaChange()"></textarea>
+      </div>
+      <p class="setting-hint" id="model-format-hint" data-i18n="hintModelFormat">OpenRouter系は provider/model 形式（例: openai/gpt-4o）、直接APIはモデル名のみ</p>
+      <div class="setting-row">
+        <label data-i18n="labelActiveModel">アクティブモデル</label>
+        <select id="model-select" onchange="onActiveModelChange()"></select>
+      </div>
+      <div class="setting-row" id="provider-status">
+        <span data-i18n="currentProvider">現在: </span>
+        <strong id="current-provider"></strong>
+        <span> / </span>
+        <strong id="current-model"></strong>
+      </div>
+      <button class="btn btn-primary" id="apply-provider-btn" onclick="applyProvider()" data-i18n="btnApply">適用して再接続</button>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="secApiParams">API 共通パラメータ</h2>
+      <div class="setting-row">
+        <label data-i18n="labelMaxTokens">Max Tokens</label>
+        <input type="number" id="api-max-tokens" min="100" max="100000" step="100">
+      </div>
+      <div class="setting-row">
+        <label data-i18n="labelTemperature">Temperature</label>
+        <input type="number" id="api-temperature" min="0" max="2" step="0.1">
+      </div>
+      <p class="setting-hint" data-i18n="hintTemperature">低いほど安定、高いほど多様な応答（会話は0.7〜1.0が目安）</p>
+      <div class="setting-row">
+        <label data-i18n="labelTimeout">Timeout (sec)</label>
+        <input type="number" id="api-timeout" min="10" max="600" step="5">
+      </div>
+      <p class="setting-hint" data-i18n="hintTimeout">API応答の最大待ち時間。長文生成時は長めに</p>
+      <button class="btn btn-secondary" id="apply-api-btn" onclick="applyApiParams()" data-i18n="btnApply">適用</button>
+    </section>
+  </div>
+
+  <!-- Tab: Watchdog -->
+  <div id="tab-watchdog" class="tab-panel">
+    <section class="settings-section">
+      <h2 data-i18n="secWatchdog">放置検知設定</h2>
+      <div class="setting-row">
+        <label data-i18n="labelWatchdogEnabled">有効</label>
+        <label class="toggle">
+          <input type="checkbox" id="watchdog-enabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <label data-i18n="labelCheckInterval">チェック間隔 (秒)</label>
+        <input type="number" id="watchdog-interval" min="10" max="3600" step="5">
+      </div>
+      <p class="setting-hint" data-i18n="hintCheckInterval">放置検知の確認頻度。短すぎると負荷、長すぎると検知が遅れます</p>
+
+      <h3 data-i18n="secEscalation">エスカレーション段階</h3>
+      <div id="escalation-levels"></div>
+      <button class="btn btn-secondary" id="apply-watchdog-btn" onclick="applyWatchdog()" data-i18n="btnApply">適用</button>
+    </section>
+  </div>
+
+  <!-- Tab: Style -->
+  <div id="tab-style" class="tab-panel">
+    <section class="settings-section">
+      <h2 data-i18n="secStyleGlobal">グローバル文体設定</h2>
+      <div class="setting-row">
+        <label data-i18n="customViewpoint">語り手</label>
+        <select id="global-viewpoint">
+          <option value="ai_character" data-i18n-value="optAIChar">AIキャラ視点</option>
+          <option value="user_character" data-i18n-value="optUserChar">ユーザーキャラ視点</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label data-i18n="customNarration">地の文</label>
+        <select id="global-narration" onchange="updateGlobalPersonToggle()">
+          <option value="true" data-i18n-value="optNarrationOn">あり</option>
+          <option value="false" data-i18n-value="optNarrationOff">なし</option>
+        </select>
+      </div>
+      <div class="setting-row" id="global-person-row">
+        <label data-i18n="customPerson">人称</label>
+        <select id="global-person">
+          <option value="first" data-i18n-value="optFirstPerson">一人称</option>
+          <option value="third" data-i18n-value="optThirdPerson">三人称</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" id="apply-style-btn" onclick="applyGlobalStyle()" data-i18n="btnApply">適用</button>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="secPersonaStyles">ペルソナ別スタイル</h2>
+      <p class="setting-hint" data-i18n="styleHint">各ペルソナの personas/{id}/style.yaml で管理されます。Persona Studio で編集してください。</p>
+      <div id="persona-style-list"></div>
+    </section>
+  </div>
+
+  <!-- Tab: Advanced -->
+  <div id="tab-advanced" class="tab-panel">
+    <section class="settings-section">
+      <h2 data-i18n="secSession">セッション設定</h2>
+      <div class="setting-row">
+        <label data-i18n="labelMaxContextTokens">最大コンテキストトークン</label>
+        <input type="number" id="session-max-tokens" min="4000" max="200000" step="1000">
+      </div>
+      <p class="setting-hint" data-i18n="hintMaxContextTokens">会話履歴として保持する最大トークン数。長いRPほど大きな値が必要です。</p>
+      <div class="setting-row">
+        <label data-i18n="labelSaveInterval">保存間隔（往復数）</label>
+        <input type="number" id="session-save-interval" min="1" max="100" step="1">
+      </div>
+      <p class="setting-hint" data-i18n="hintSaveInterval">何往復ごとに履歴をファイルに保存するか（通常は1でOK）</p>
+      <button class="btn btn-secondary" id="apply-session-btn" onclick="applySessionSettings()" data-i18n="btnApply">適用</button>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="secPaths">パス設定（config.yaml で管理）</h2>
+      <div class="setting-row readonly">
+        <label data-i18n="labelChromaPath">ChromaDB パス</label>
+        <input type="text" id="path-chroma" readonly>
+      </div>
+      <div class="setting-row readonly">
+        <label data-i18n="labelEmbeddingModel">埋め込みモデル</label>
+        <input type="text" id="path-embedding" readonly>
+      </div>
+      <div class="setting-row readonly">
+        <label data-i18n="labelPersonasDir">Personas ディレクトリ</label>
+        <input type="text" id="path-personas" readonly>
+      </div>
+    </section>
+
+    <section class="settings-section danger-zone">
+      <h2 data-i18n="secDanger">危険な操作</h2>
+      <button class="btn btn-danger" onclick="resetAllSettings()" data-i18n="btnResetAll">全設定リセット</button>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+</div>
+
+<script src="/frontend/js/i18n.js"></script>
+<script src="/frontend/js/settings.js"></script>
+</body>
+</html>

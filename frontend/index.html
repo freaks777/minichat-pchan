@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RP Standalone</title>
+<link rel="stylesheet" href="/frontend/css/style.css">
+</head>
+<body>
+
+<nav id="top-nav">
+  <a href="/sessions" data-i18n="navSessions">セッション</a>
+  <a href="/studio" data-i18n="navStudio">Studio</a>
+  <a href="/settings" data-i18n="navSettings">設定</a>
+  <span class="nav-spacer"></span>
+  <button id="lang-toggle" onclick="toggleLang()">EN</button>
+</nav>
+
+<!-- スタイル選択パネル -->
+<div id="style-panel">
+  <h2 data-i18n="styleTitle">文体プリセット</h2>
+  <div class="sub" id="persona-name-display">ペルソナ: ...</div>
+  <ul class="preset-list" id="preset-list"></ul>
+  <div id="custom-opts">
+    <div class="opt-row">
+      <label data-i18n="customViewpoint">語り手</label>
+      <select id="custom-viewpoint">
+        <option value="ai_character" data-i18n-value="optAIChar">AIキャラ視点</option>
+        <option value="user_character" data-i18n-value="optUserChar">ユーザーキャラ視点</option>
+      </select>
+    </div>
+    <div class="opt-row">
+      <label data-i18n="customNarration">地の文</label>
+      <select id="custom-narration">
+        <option value="true" data-i18n-value="optNarrationOn">あり</option>
+        <option value="false" data-i18n-value="optNarrationOff">なし</option>
+      </select>
+    </div>
+    <div class="opt-row" id="custom-person-row">
+      <label data-i18n="customPerson">人称</label>
+      <select id="custom-person">
+        <option value="first" data-i18n-value="optFirstPerson">一人称</option>
+        <option value="third" data-i18n-value="optThirdPerson">三人称</option>
+      </select>
+    </div>
+  </div>
+  <button id="start-btn" data-i18n="styleStart">セッション開始</button>
+</div>
+
+<!-- チャットUI -->
+<div id="chat-ui">
+  <div id="header">
+    <div class="header-left">
+      <span id="header-persona">...</span>
+      <span id="header-model"></span>
+    </div>
+    <div class="header-right">
+      <button id="state-toggle-btn" type="button" onclick="toggleStatePanel()" style="display:none;margin-right:8px;font-size:11px;padding:2px 6px;background:var(--surface);color:var(--text-dim);border:1px solid var(--border);border-radius:3px;cursor:pointer" data-i18n="btnState">状態</button>
+      <span id="header-style"></span>
+      <span id="header-status" class="status-dot"></span>
+    </div>
+  </div>
+  <div id="log"></div>
+  <div id="state-panel" style="display:none">
+    <div id="state-content"></div>
+  </div>
+  <div id="typing-indicator">
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  </div>
+  <div id="input-area">
+    <textarea id="msg-input" rows="1" data-i18n-placeholder="inputPlaceholder" placeholder="メッセージを入力..." autofocus disabled></textarea>
+    <button id="send-btn" type="button" disabled data-i18n="sendButton">送信</button>
+  </div>
+</div>
+
+<script src="/frontend/js/i18n.js"></script>
+<script src="/frontend/js/chat.js"></script>
+</body>
+</html>

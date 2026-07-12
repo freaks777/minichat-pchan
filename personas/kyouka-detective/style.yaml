@@ -1,0 +1,17 @@
+# 九条鏡花 — 文体プリセット定義
+
+style:
+  viewpoint: ai_character    # 語り手: ai_character / user_character
+  person: first              # 人称表現: first=一人称 / third=三人称
+  narration: true            # 地の文: true=あり / false=なし
+
+presets:
+  - id: novel_ai
+    label: "小説調（AI視点・一人称）"
+    style: { viewpoint: ai_character, person: first, narration: true }
+  - id: novel_user
+    label: "小説調・ユーザー視点（三人称）"
+    style: { viewpoint: user_character, person: third, narration: true }
+  - id: chat
+    label: "チャット調（地の文なし）"
+    style: { viewpoint: ai_character, person: first, narration: false }

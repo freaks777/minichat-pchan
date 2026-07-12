@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>セッション設定 — RP Standalone</title>
+<link rel="stylesheet" href="/frontend/css/style.css">
+</head>
+<body>
+
+<nav id="top-nav">
+  <a href="/sessions" data-i18n="navSessions">セッション</a>
+  <a href="/studio" data-i18n="navStudio">Studio</a>
+  <a href="/settings" data-i18n="navSettings">設定</a>
+  <span class="nav-spacer"></span>
+  <button id="lang-toggle" onclick="toggleLang()">EN</button>
+</nav>
+
+<div id="setup-ui">
+  <div class="step active" id="step-persona">
+    <h1 data-i18n="setupTitle">セッション設定</h1>
+    <p class="step-sub" data-i18n="stepPersonaDesc">使用するキャラクターを選んでください</p>
+    <div id="persona-grid" class="persona-grid"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="next-to-style" data-i18n="btnNext">次へ：文体選択</button>
+    </div>
+  </div>
+  <div class="step" id="step-style">
+    <h1 data-i18n="customStyleTitle">文体設定</h1>
+    <p class="step-sub"><span id="selected-persona-name"></span></p>
+    <div id="style-preset-list"></div>
+    <div id="custom-style-opts" style="display:none;margin-top:16px">
+      <div class="setting-row">
+        <label data-i18n="customViewpoint">語り手</label>
+        <select id="setup-viewpoint">
+          <option value="ai_character" data-i18n-value="optAIChar">AIキャラ視点</option>
+          <option value="user_character" data-i18n-value="optUserChar">ユーザーキャラ視点</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label data-i18n="customNarration">地の文</label>
+        <select id="setup-narration">
+          <option value="true" data-i18n-value="optNarrationOn">あり</option>
+          <option value="false" data-i18n-value="optNarrationOff">なし</option>
+        </select>
+      </div>
+      <div class="setting-row" id="setup-person-row">
+        <label data-i18n="customPerson">人称</label>
+        <select id="setup-person">
+          <option value="first" data-i18n-value="optFirstPerson">一人称</option>
+          <option value="third" data-i18n-value="optThirdPerson">三人称</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="back-to-persona" data-i18n="btnBack">戻る</button>
+      <button class="btn btn-primary" id="start-session-btn" data-i18n="styleStart">セッション開始</button>
+    </div>
+  </div>
+  <div class="overlay" id="loading-overlay" style="display:none">
+    <div class="spinner"></div>
+    <span data-i18n="loadingText">読み込み中...</span>
+  </div>
+</div>
+
+<script src="/frontend/js/i18n.js"></script>
+<script src="/frontend/js/session-setup.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>セッション一覧 — RP Standalone</title>
+<link rel="stylesheet" href="/frontend/css/style.css">
+</head>
+<body>
+
+<nav id="top-nav">
+  <a href="/sessions" class="active" data-i18n="navSessions">セッション</a>
+  <a href="/studio" data-i18n="navStudio">Studio</a>
+  <a href="/settings" data-i18n="navSettings">設定</a>
+  <span class="nav-spacer"></span>
+  <button id="lang-toggle" onclick="toggleLang()">EN</button>
+</nav>
+
+<div id="sessions-ui">
+  <header id="sessions-header">
+    <h1 data-i18n="sessionsTitle">セッション一覧</h1>
+    <div class="header-nav">
+      <button class="btn btn-secondary btn-sm sort-btn" data-sort="updated" onclick="setSort('updated')" data-i18n="sortUpdated">更新順</button>
+      <button class="btn btn-secondary btn-sm sort-btn" data-sort="created" onclick="setSort('created')" data-i18n="sortCreated">作成順</button>
+      <button class="btn btn-primary" id="new-session-btn" data-i18n="btnNewSession">新規セッション</button>
+    </div>
+  </header>
+
+  <div id="sessions-list" class="sessions-list"></div>
+
+  <div id="empty-state" class="empty-state" style="display:none">
+    <p data-i18n="emptySessions">セッションがありません</p>
+    <p class="empty-hint" data-i18n="emptyHint">「新規セッション」から始めてみましょう</p>
+  </div>
+</div>
+
+<script src="/frontend/js/i18n.js"></script>
+<script src="/frontend/js/sessions.js"></script>
+</body>
+</html>
