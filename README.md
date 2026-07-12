@@ -1,8 +1,16 @@
 # minichat-pchan
 
+> ⚠️ **開発中 / Under Development** — 破壊的変更が入る可能性があります。Breaking changes may occur.
+
 AIキャラクターとチャットするアプリ。`SOUL.md` で魂を定義し、複数ペルソナを切り替えて会話できる。
 
 Chat with AI characters. Define their soul in `SOUL.md`, switch between multiple personas.
+
+## Why
+
+AIとのロールプレイ用アプリは多数あるが、キャラクター定義の自由度が低かったり、特定サービスにロックインされるものが多い。`SOUL.md` というシンプルなマークダウンファイル1つでキャラを作り、好きなLLMプロバイダで動かせる自分用のアプリが欲しかった。
+
+Many roleplay apps exist, but most lock you into a specific service or limit character customization. I wanted a simple app where one `SOUL.md` file defines a character, running on any LLM provider of your choice.
 
 ## Features
 
