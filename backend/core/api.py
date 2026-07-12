@@ -9,6 +9,7 @@
 from typing import AsyncGenerator
 
 import httpx
+import logging
 
 
 # ── プロバイダ解決 ──────────────────────────────────────────────
@@ -167,7 +168,6 @@ async def _openai_sync(
         content = data["choices"][0]["message"]["content"]
         if not content or not content.strip():
             finish = data["choices"][0].get("finish_reason", "unknown")
-            import logging
             logging.getLogger("rp_standalone").warning(
                 "API returned empty content. finish_reason=%s, model=%s", finish, model
             )
