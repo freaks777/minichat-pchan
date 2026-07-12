@@ -63,6 +63,14 @@ providers:
     api_key: ${OPENCODE_API_KEY}
     models:
       - deepseek-v4-pro
+  # OpenCode Zen（有料プラン）。base_url と models は要確認。
+  # OpenCode Zen (paid plan). Verify base_url and available models.
+  opencode:
+    base_url: https://opencode.ai/zen/v1
+    api_key: ${OPENCODE_API_KEY}
+    models:
+      - deepseek-v4-pro
+      - claude-sonnet-5
 
 # ── デフォルトプロバイダ・モデル ──────────────────────────────
 # 起動時に選択されるプロバイダとモデル。設定画面から切り替え可能です。

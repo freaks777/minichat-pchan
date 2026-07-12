@@ -17,7 +17,7 @@ Many roleplay apps exist, but some limit character customization or tie users to
 - **SOUL.md + SKILL.md** — キャラクターの人格・知識をマークダウンで定義
 - **マルチペルソナ** — 複数キャラを登録・切替可能
 - **プラグイン機構** — secrets（機密情報マスク）/ memory（長期記憶）/ watchdog（離席監視）/ mail（メール通知）/ session_log 他
-- **マルチプロバイダ** — 8プロバイダ対応（詳細は Supported Providers 参照）
+- **マルチプロバイダ** — 9プロバイダ対応（詳細は Supported Providers 参照）
 - **SPA フロントエンド** — チャット・セッション管理・ペルソナスタジオ・設定画面
 
 ## Quick Start
@@ -99,6 +99,7 @@ All 8 providers are configured in `config.default.yaml`, but those without a ver
 |---|---|---|
 | OpenRouter | OpenAI-compatible | ✅ Verified |
 | OpenCode Go | OpenAI-compatible | ✅ Verified |
+| OpenCode | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | OpenAI | OpenAI-compatible | ⚠️ Not tested (requires API key) |
 | Anthropic | Anthropic API | ⚠️ Not tested (requires API key) |
 | Google | Google API | ⚠️ Not tested (requires API key) |
