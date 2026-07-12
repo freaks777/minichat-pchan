@@ -20,6 +20,23 @@ Many roleplay apps exist, but some limit character customization or tie users to
 - **8プロバイダ対応** — OpenRouter / OpenAI / Anthropic / Google / xAI / DeepSeek / GLM / OpenCode
 - **SPA フロントエンド** — チャット・セッション管理・ペルソナスタジオ・設定画面
 
+### Provider Status / プロバイダ検証状況
+
+`config.default.yaml` に全8プロバイダの設定が含まれているが、APIキー取得に別途契約が必要なものは**動作未検証**。
+
+All 8 providers are configured in `config.default.yaml`, but those requiring a separate subscription are **untested**.
+
+| Provider | API Type | Status |
+|---|---|---|
+| OpenRouter | openai互換 | ✅ 動作確認済み / Verified |
+| OpenCode | openai互換 | ✅ 動作確認済み / Verified |
+| OpenAI | openai互換 | ⚠️ 未検証（要契約 / needs subscription） |
+| Anthropic | anthropic | ⚠️ 未検証（要契約 / needs subscription） |
+| Google | google | ⚠️ 未検証（要契約 / needs subscription） |
+| xAI | openai互換 | ⚠️ 未検証（要契約 / needs subscription） |
+| DeepSeek | openai互換 | ⚠️ 未検証（要契約 / needs subscription） |
+| GLM | openai互換 | ⚠️ 未検証（要契約 / needs subscription） |
+
 ## Quick Start
 
 ### 1. 環境変数
