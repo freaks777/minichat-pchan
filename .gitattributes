@@ -1,0 +1,33 @@
+# 全ファイル：Git が自動判別（テキストはLFに正規化、バイナリはそのまま）
+* text=auto
+
+# ソースコード
+*.py      text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.js      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.env     text eol=lf
+*.gitignore text eol=lf
+
+# Windows バッチファイル（CRLF必須）
+*.bat     text eol=crlf
+
+# シェルスクリプト（LF必須）
+*.sh      text eol=lf
+
+# バイナリ（変換しない）
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.mp3     binary
+*.wav     binary
+*.ttf     binary
+*.woff    binary
+*.woff2   binary
