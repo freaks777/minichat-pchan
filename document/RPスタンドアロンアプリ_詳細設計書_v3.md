@@ -1,7 +1,7 @@
-# RPスタンドアロンアプリ 詳細設計書 v3.4.2（コア／プラグイン分離版）
+# RPスタンドアロンアプリ 詳細設計書 v3.5.0（コア／プラグイン分離版）
 
 作成: 2026-06-30
-最終更新: 2026-07-12 (v3.4.2)
+最終更新: 2026-07-13 (v3.5.0)
 ベース: `スタンドアロン設計書.md`（CLI版）/ v2からの再構成
 
 ---
@@ -1379,3 +1379,108 @@ os.replace(temp_path, config_path)
 | `config.default.yaml` | 全セクションに日本語コメント追記（用途・指定方法・値の範囲） |
 | `.env.example` | APIキー発行元URL・Gmailアプリパスワード発行手順を明記 |
 | リポジトリ名 | `charachat` → `minichat-pchan`（GitHub上でリネーム、リモートURL自動追従） |
+
+## 15. v3.5 Geminiコードレビュー対応 + 堅牢化（2026-07-13）
+
+### 15.1 Pydantic リクエスト検証
+
+全22のPOSTエンドポイントを `data: dict` から Pydantic `BaseModel` に変換。型検証・必須項目チェック・Swagger自動生成が有効化された。
+
+```python
+class UpdateMessageRequest(BaseModel):
+    index: int
+    content: str
+    persona_id: str = ""
+    session_id: str = ""
+```
+
+`chat_sse` と `create_template` は複雑なdict構造のため据え置き。
+
+### 15.2 config二重管理解消
+
+`update_config_yaml()` でファイルに書き戻した後、メモリ上の `config` に同じ値を手動で再設定していた重複を排除。同じ `mutator` 関数を `config` にも適用する方式に統一。
+
+```python
+# 変更前
+update_config_yaml(CONFIG_PATH, mutator)
+config["active_provider"] = provider  # 二重記述
+config["active_model"] = model
+
+# 変更後
+update_config_yaml(CONFIG_PATH, mutator)
+mutator(config)  # 同一mutatorをメモリにも適用
+```
+
+### 15.3 JSONDecodeError ログ追加
+
+`core/api.py` の3プロバイダのストリーミング関数で SSEパース例外をサイレントに `continue` していたのを修正。`logger.warning()` で記録。
+
+### 15.4 persona_id バリデーション 3層防御
+
+| 層 | 場所 | 内容 |
+|----|------|------|
+| HTML | `studio.html` | `pattern="[a-zA-Z0-9_-]+"` `maxlength="64"` |
+| JS | `studio.js` | `validatePersonaId()` + `input` イベントでリアルタイム検出 |
+| Backend | `persona_manager.py` | `_MAX_PERSONA_ID_LEN = 64` + `re.fullmatch` |
+
+`resetAll()` / `loadDraft()` 後のバリデーション再評価も対応。`t-income` の死に参照2行を削除（v3.3でフィールド廃止済み）。
+
+### 15.5 extract_fields バッチ分割
+
+OpenCode Go無料枠の出力制限（`finish_reason=length`）対策として、27フィールドを `_EXTRACTION_BATCH_SIZE = 10` ごとのバッチに分割。`_build_extraction_prompt()` に `fields` パラメータを追加し、サブセット抽出を可能にした。
+
+```python
+_EXTRACTION_BATCH_SIZE = 10
+batches = [all_fields[i:i + _EXTRACTION_BATCH_SIZE] for i in range(0, len(all_fields), _EXTRACTION_BATCH_SIZE)]
+```
+
+フィールド数が増減しても自動でバッチ数が調整される。
+
+### 15.6 DeepSeek推論モデル `reasoning_content` 対応
+
+`deepseek-v4-pro` は出力を `content` ではなく `reasoning_content` フィールドに格納する。`_openai_sync()` / `_openai_stream()` にフォールバックを追加。
+
+```python
+content = msg.get("content", "")
+if (not content or not content.strip()) and msg.get("reasoning_content"):
+    content = msg["reasoning_content"]
+```
+
+### 15.7 抽出API タイムアウト延長
+
+- サーバー側: `_make_config(max_tokens=16000, timeout=300)` — 1バッチあたり最大300秒
+- クライアント側: `AbortController(300000)` — 3バッチ合計で最大300秒
+- 入力6000文字超過時にトリム
+
+### 15.8 ロガー名統一
+
+`api.py` と `persona_studio/plugin.py` 内のロガー名が `rp_standalone`（アンダースコア）だったのを `rp-standalone`（ハイフン）に統一。main.py がハンドラを設定しているロガーと一致せず、全ログがサイレントに破棄されていた問題を修正。
+
+### 15.9 asyncio.Lock（準備）
+
+複数ブラウザタブからの同時リクエストによるデータ競合を防止するため、`_api_lock = asyncio.Lock()` を追加。各エンドポイントへの適用は後続タスク。
+
+### 15.10 UI 改善
+
+| 項目 | 変更 |
+|------|------|
+| 設定画面プロバイダ表示 | 横並び「現在: provider / model」→ 縦2行「プロバイダ:」「モデル:」 |
+| Studio ペルソナ一覧 | persona_id を11px薄字で追加、日付+ID左寄せ・名前右寄せ |
+| raw-text エリア | 「ファイルから生成」→「テキストから生成（貼り付け）」、文字数カウンター追加 |
+| escapeHtml | `studio.js` のシングルクォート未対応 + nullガードなしを修正、全6ファイル統一 |
+
+### 15.11 プロバイダ設定
+
+| 項目 | 内容 |
+|------|------|
+| OpenCode Zen 追加 | `config.default.yaml` に `opencode-zen` プロバイダ追加、base_url `https://opencode.ai/zen/v1` |
+| プロバイダキー名整理 | `opencode` → `opencode-zen` にリネーム |
+| README | `Supported Providers` セクション追加、検証状況テーブル（✅/⚠️）、プロバイダ数固定表記廃止、Google API→Gemini API |
+
+### 15.12 削除・クリーンアップ
+
+| 項目 | 内容 |
+|------|------|
+| `import yaml` | `main.py` L25の死にimportを削除（ruamel.yaml移行済み） |
+| `STATE` 最大長 | `MAX_STATE_LENGTH = 4096` 追加 |
+| `t-income` 参照 | `fillTemplateForm()` 内のv3.3廃止フィールド参照2行を削除 |
