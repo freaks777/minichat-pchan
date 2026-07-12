@@ -2,15 +2,15 @@
 
 > ⚠️ **開発中 / Under Development** — 破壊的変更が入る可能性があります。Breaking changes may occur.
 
-AIキャラクターとチャットするアプリ。`SOUL.md` で魂を定義し、複数ペルソナを切り替えて会話できる。
+AIキャラクターとチャットするアプリ。`SOUL.md` に人格を書き、複数ペルソナを切り替えて会話できる。
 
-Chat with AI characters. Define their soul in `SOUL.md`, switch between multiple personas.
+Chat with AI characters. Write their personality in a `SOUL.md` file, switch between multiple personas.
 
 ## Why
 
-AIとのロールプレイ用アプリは多数あるが、キャラクター定義の自由度が低かったり、特定サービスにロックインされるものが多い。`SOUL.md` というシンプルなマークダウンファイル1つでキャラを作り、好きなLLMプロバイダで動かせる自分用のアプリが欲しかった。
+AIとのロールプレイ用アプリは多数あるが、キャラクター定義の自由度やLLMプロバイダの選択肢に制約がある場合が多い。`SOUL.md` というシンプルなファイル1つでキャラを作り、好きなプロバイダで動かせる自分用のアプリが欲しかった。
 
-Many roleplay apps exist, but most lock you into a specific service or limit character customization. I wanted a simple app where one `SOUL.md` file defines a character, running on any LLM provider of your choice.
+Many roleplay apps exist, but some limit character customization or tie users to specific services. I wanted a simple app where one `SOUL.md` file defines a character, running on any LLM provider of your choice.
 
 ## Features
 
