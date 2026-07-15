@@ -265,6 +265,27 @@ class SecretsTests(unittest.TestCase):
         self.assertIn("content = _protect_secret_data(req.content)", source)
         self.assertNotIn("content = req.content", source)
 
+class FrontendXssTests(unittest.TestCase):
+    def test_external_values_use_dom_properties_and_listeners(self):
+        js_dir = ROOT / "frontend" / "js"
+        chat = (js_dir / "chat.js").read_text(encoding="utf-8")
+        setup = (js_dir / "session-setup.js").read_text(encoding="utf-8")
+        sessions = (js_dir / "sessions.js").read_text(encoding="utf-8")
+        settings = (js_dir / "settings.js").read_text(encoding="utf-8")
+        studio = (js_dir / "studio.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("li.innerHTML", chat)
+        self.assertIn('text.textContent = String(p.label ?? "")', chat)
+        self.assertNotIn("label.innerHTML", setup)
+        self.assertIn("preview.textContent = JSON.stringify(est, null, 2)", setup)
+        self.assertNotIn('onclick="continueSession', sessions)
+        self.assertIn("continueBtn.addEventListener('click'", sessions)
+        self.assertNotIn('onclick="editPersonaStyle', settings)
+        self.assertIn("summary.textContent", settings)
+        self.assertNotIn("${data.error}", studio)
+        self.assertIn("error.textContent = String(data.error)", studio)
+        self.assertNotIn('onclick="${onClick}', studio)
+        self.assertIn('card.addEventListener("click", loadPersona)', studio)
 
 class WatchdogTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_end_does_not_permanently_stop_monitor(self):

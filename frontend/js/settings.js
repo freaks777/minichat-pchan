@@ -297,46 +297,61 @@ async function applyGlobalStyle() {
 
 async function populatePersonaStyles() {
   const container = document.getElementById('persona-style-list');
+  container.replaceChildren();
   try {
     const personasRes = await fetch('/api/persona/list');
     const personas = await personasRes.json();
 
-    let html = '';
     for (const p of personas) {
-      const styleRes = await fetch(`/api/persona/${p.id}/style`);
+      const personaId = String(p.id ?? '');
+      const styleRes = await fetch(`/api/persona/${encodeURIComponent(personaId)}/style`);
       const styleData = await styleRes.json();
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      const content = document.createElement('div');
+      const button = document.createElement('button');
+      details.className = 'persona-style-detail';
+      content.className = 'style-detail-content';
 
       if (styleData.status === 'ok') {
-        const presets = styleData.presets || [];
-        const def = styleData.default_style || {};
-        html += `
-          <details class="persona-style-detail">
-            <summary>${escapeHtml(p.name)} (${p.id})</summary>
-            <div class="style-detail-content">
-              <p><strong>${t('defaultStyle')}:</strong> ${presetDescription(def)}</p>
-              <p><strong>${t('presetsLabel')}:</strong></p>
-              <ul>
-                ${presets.map(pr => `<li>${escapeHtml(pr.label)}: ${presetDescription(pr.style)}</li>`).join('')}
-              </ul>
-              <button class="btn btn-secondary btn-sm" onclick="editPersonaStyle('${p.id}')" data-i18n="btnEditInStudio">Studioで編集</button>
-            </div>
-          </details>
-        `;
+        summary.textContent = `${String(p.name ?? '')} (${personaId})`;
+        const defaultLine = document.createElement('p');
+        const defaultLabel = document.createElement('strong');
+        defaultLabel.textContent = `${t('defaultStyle')}: `;
+        defaultLine.append(defaultLabel, document.createTextNode(presetDescription(styleData.default_style || {})));
+
+        const presetsLabel = document.createElement('p');
+        const presetsStrong = document.createElement('strong');
+        presetsStrong.textContent = `${t('presetsLabel')}:`;
+        presetsLabel.appendChild(presetsStrong);
+        const list = document.createElement('ul');
+        (styleData.presets || []).forEach(preset => {
+          const item = document.createElement('li');
+          item.textContent = `${String(preset.label ?? '')}: ${presetDescription(preset.style)}`;
+          list.appendChild(item);
+        });
+        button.className = 'btn btn-secondary btn-sm';
+        button.dataset.i18n = 'btnEditInStudio';
+        button.textContent = t('btnEditInStudio');
+        content.append(defaultLine, presetsLabel, list, button);
       } else {
-        html += `
-          <details class="persona-style-detail">
-            <summary>${escapeHtml(p.name)} (${p.id}) — ${t('styleNotConfigured')}</summary>
-            <div class="style-detail-content">
-              <button class="btn btn-primary btn-sm" onclick="editPersonaStyle('${p.id}')" data-i18n="btnCreateInStudio">Studioで作成</button>
-            </div>
-          </details>
-        `;
+        summary.textContent = `${String(p.name ?? '')} (${personaId}) — ${t('styleNotConfigured')}`;
+        button.className = 'btn btn-primary btn-sm';
+        button.dataset.i18n = 'btnCreateInStudio';
+        button.textContent = t('btnCreateInStudio');
+        content.appendChild(button);
       }
+
+      button.addEventListener('click', () => editPersonaStyle(personaId));
+      details.append(summary, content);
+      container.appendChild(details);
     }
-    container.innerHTML = html;
   } catch (err) {
     console.error('populatePersonaStyles error:', err);
-    container.innerHTML = '<p style="color:var(--error);">読み込み失敗</p>';
+    const error = document.createElement('p');
+    error.className = 'load-error';
+    error.textContent = '読み込み失敗';
+    container.replaceChildren(error);
   }
 }
 

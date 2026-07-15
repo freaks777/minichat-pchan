@@ -17,23 +17,24 @@ async function loadSessions() {
     renderSessions(data.sessions || []);
   } catch (err) {
     console.error('loadSessions error:', err);
-    document.getElementById('sessions-list').innerHTML = '<p style="color:var(--error);padding:20px;">読み込み失敗: ' + err.message + '</p>';
+    const error = document.createElement('p');
+    error.className = 'load-error';
+    error.textContent = '読み込み失敗: ' + err.message;
+    document.getElementById('sessions-list').replaceChildren(error);
   }
 }
 
 function renderSessions(sessions) {
   const listEl = document.getElementById('sessions-list');
   const emptyEl = document.getElementById('empty-state');
+  listEl.replaceChildren();
 
   if (!sessions || sessions.length === 0) {
-    listEl.innerHTML = '';
     emptyEl.style.display = 'block';
     return;
   }
 
   emptyEl.style.display = 'none';
-
-  // ソート
   const sorted = [...sessions].sort((a, b) => {
     const aVal = a[currentSort];
     const bVal = b[currentSort];
@@ -42,24 +43,57 @@ function renderSessions(sessions) {
     return 0;
   });
 
-  listEl.innerHTML = sorted.map(s => `
-    <div class="session-card" data-id="${s.id}" data-persona="${s.persona_id}">
-      <div class="session-main">
-        <span class="session-persona">${escapeHtml(s.persona_name)}</span>
-        <span class="session-persona-id">${escapeHtml(s.persona_id)}</span>
-        <span class="session-date">${t('updatedLabel')} ${formatDate(s.updated)}</span>
-      </div>
-      <div class="session-meta">
-        <span class="session-created" data-i18n="createdLabel">作成: ${formatDate(s.created)}</span>
-        <span class="session-turns">${s.turns} ${t('turnsLabel')}</span>
-      </div>
-      <div class="session-actions">
-        <button class="btn btn-secondary btn-sm" onclick="continueSession('${s.id}')" data-i18n="btnContinue">続きから</button>
-        <button class="btn btn-primary btn-sm" onclick="startNewSession('${s.persona_id}')" data-i18n="btnNewWith">このキャラで新規</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteSession('${s.id}')" data-i18n="btnDelete">削除</button>
-      </div>
-    </div>
-  `).join('');
+  sorted.forEach(s => {
+    const card = document.createElement('div');
+    const main = document.createElement('div');
+    const persona = document.createElement('span');
+    const personaId = document.createElement('span');
+    const updated = document.createElement('span');
+    const meta = document.createElement('div');
+    const created = document.createElement('span');
+    const turns = document.createElement('span');
+    const actions = document.createElement('div');
+    const continueBtn = document.createElement('button');
+    const newBtn = document.createElement('button');
+    const deleteBtn = document.createElement('button');
+
+    card.className = 'session-card';
+    card.dataset.id = String(s.id ?? '');
+    card.dataset.persona = String(s.persona_id ?? '');
+    main.className = 'session-main';
+    persona.className = 'session-persona';
+    persona.textContent = String(s.persona_name ?? '');
+    personaId.className = 'session-persona-id';
+    personaId.textContent = String(s.persona_id ?? '');
+    updated.className = 'session-date';
+    updated.textContent = `${t('updatedLabel')} ${formatDate(s.updated)}`;
+    main.append(persona, personaId, updated);
+
+    meta.className = 'session-meta';
+    created.className = 'session-created';
+    created.textContent = `${t('createdLabel') || '作成:'} ${formatDate(s.created)}`;
+    turns.className = 'session-turns';
+    turns.textContent = `${s.turns ?? 0} ${t('turnsLabel')}`;
+    meta.append(created, turns);
+
+    actions.className = 'session-actions';
+    continueBtn.className = 'btn btn-secondary btn-sm';
+    continueBtn.dataset.i18n = 'btnContinue';
+    continueBtn.textContent = t('btnContinue');
+    continueBtn.addEventListener('click', () => continueSession(String(s.id ?? '')));
+    newBtn.className = 'btn btn-primary btn-sm';
+    newBtn.dataset.i18n = 'btnNewWith';
+    newBtn.textContent = t('btnNewWith');
+    newBtn.addEventListener('click', () => startNewSession(String(s.persona_id ?? '')));
+    deleteBtn.className = 'btn btn-danger btn-sm';
+    deleteBtn.dataset.i18n = 'btnDelete';
+    deleteBtn.textContent = t('btnDelete');
+    deleteBtn.addEventListener('click', () => deleteSession(String(s.id ?? '')));
+    actions.append(continueBtn, newBtn, deleteBtn);
+
+    card.append(main, meta, actions);
+    listEl.appendChild(card);
+  });
 }
 
 function formatDate(isoString) {

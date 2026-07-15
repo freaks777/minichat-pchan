@@ -9,9 +9,9 @@
 
 ### 1. CSP/XSS 監査と対策（5段階）
 
-1. ユーザー入力・API応答が到達するDOM挿入箇所を監査（優先: `studio.js:590` のAPIエラー挿入）
-2. 危険な `innerHTML` をDOM構築または `textContent` に変更
-3. インラインイベント（`onclick`, `onchange` 等）を `addEventListener` に移行
+1. ✅ DOM挿入箇所の監査完了（F1〜F5を特定）
+2. 🔄 危険な `innerHTML` のDOM構築化 — F1〜F3の優先経路は対応済み。固定HTML・低リスク箇所の削減は継続
+3. 🔄 インラインイベントの廃止 — F1〜F3の動的生成箇所は対応済み。静的HTML等の残存箇所を `addEventListener` へ移行
 4. report-only 相当でCSP違反を確認
 5. CSP を正式適用
 

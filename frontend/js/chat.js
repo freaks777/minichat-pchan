@@ -41,27 +41,37 @@ function updatePersonToggle() {
 
 function renderPresets() {
   const listEl = document.getElementById("preset-list");
-  listEl.innerHTML = "";
+  listEl.replaceChildren();
 
   presets.forEach((p, i) => {
     const li = document.createElement("li");
-    li.innerHTML = `<label>
-      <input type="radio" name="preset" value="${p.id}" ${i === 0 ? "checked" : ""}>
-      <span>${p.label}</span>
-    </label>`;
+    const label = document.createElement("label");
+    const radio = document.createElement("input");
+    const text = document.createElement("span");
+    radio.type = "radio";
+    radio.name = "preset";
+    radio.value = String(p.id ?? "");
+    radio.checked = i === 0;
+    radio.addEventListener("change", onPresetChange);
+    text.textContent = String(p.label ?? "");
+    label.append(radio, text);
+    li.appendChild(label);
     listEl.appendChild(li);
   });
 
   const customLi = document.createElement("li");
-  customLi.innerHTML = `<label>
-    <input type="radio" name="preset" value="custom">
-    <span data-i18n="styleCustom">${t("styleCustom")}</span>
-  </label>`;
+  const customLabel = document.createElement("label");
+  const customRadio = document.createElement("input");
+  const customText = document.createElement("span");
+  customRadio.type = "radio";
+  customRadio.name = "preset";
+  customRadio.value = "custom";
+  customRadio.addEventListener("change", onPresetChange);
+  customText.dataset.i18n = "styleCustom";
+  customText.textContent = t("styleCustom");
+  customLabel.append(customRadio, customText);
+  customLi.appendChild(customLabel);
   listEl.appendChild(customLi);
-
-  document.querySelectorAll('input[name="preset"]').forEach(radio => {
-    radio.addEventListener("change", onPresetChange);
-  });
 
   document.getElementById("custom-narration").addEventListener("change", updatePersonToggle);
   document.getElementById("custom-viewpoint").value = defaultStyle.viewpoint || "ai_character";

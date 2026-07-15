@@ -586,14 +586,28 @@ async function validateFiles() {
     const data = await res.json();
     const el = document.getElementById("file-validation");
     el.style.display = "block";
+    el.replaceChildren();
     if (data.error) {
-      el.innerHTML = `<span style="color:var(--error)">${data.error}</span>`;
+      const error = document.createElement("span");
+      error.className = "validation-error";
+      error.textContent = String(data.error);
+      el.appendChild(error);
     } else {
       const found = data.found || [];
       const missing = data.missing || [];
-      let html = found.map(f => `<span style="color:#22c55e">✓ ${f}</span>`).join("<br>");
-      if (missing.length) html += "<br>" + missing.map(f => `<span style="color:#f59e0b">⚠ ${f} — 登録時に自動生成</span>`).join("<br>");
-      el.innerHTML = html;
+      found.forEach(file => {
+        const line = document.createElement("span");
+        line.className = "validation-found";
+        line.textContent = `✓ ${String(file)}`;
+        el.append(line, document.createElement("br"));
+      });
+      missing.forEach(file => {
+        const line = document.createElement("span");
+        line.className = "validation-missing";
+        line.textContent = `⚠ ${String(file)} — 登録時に自動生成`;
+        el.append(line, document.createElement("br"));
+      });
+      if (el.lastElementChild?.tagName === "BR") el.lastElementChild.remove();
       setStatus(missing.length === 0 ? "全ファイル検出 — 即登録可能" : "一部ファイル不足 — 登録時に自動生成");
     }
   } catch (err) { setStatus("確認失敗: " + err, true); }
@@ -623,42 +637,81 @@ async function importPersona() {
 // ── 保存済み一覧 ──
 async function loadSavedPersonas() {
   const container = document.getElementById("saved-persona-list");
-  container.innerHTML = '<span style="color:var(--text-dim)">読み込み中...</span>';
+  const loading = document.createElement("span");
+  loading.className = "text-muted";
+  loading.textContent = "読み込み中...";
+  container.replaceChildren(loading);
   try {
     const res = await fetch("/api/persona/list");
     const personas = await res.json();
-    if (!personas.length) { container.innerHTML = '<span style="color:var(--text-dim)">登録済みペルソナはありません</span>'; return; }
-    container.innerHTML = personas.map(p => {
-      const isDraftOnly = p.status === "draft_only";
-      const draftBadge = isDraftOnly
-        ? '<span style="background:#eab308;color:#000;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">下書きのみ</span>'
-        : (p.has_draft
-          ? '<span style="background:#eab308;color:#000;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">下書きあり</span>'
-          : '');
-      const bg = isDraftOnly ? 'background:#2a2000;border-color:#eab308'
-               : p.has_draft ? 'background:#2a2000;border-color:#eab308'
-               : '';
-      const onClick = isDraftOnly ? `loadFormDraft('${p.id}')` : `loadDraft('${p.id}')`;
-      const loadLabel = isDraftOnly ? '下書き読込' : '読込';
-      return `
-      <div class="saved-persona-item" style="${bg}" onclick="${onClick}" ondblclick="deletePersona('${p.id}')">
-        <div class="saved-persona-main">
-          <span class="saved-persona-meta">
-            <span class="saved-persona-date">${p.updated || ''}</span>
-            <span class="saved-persona-id">${escapeHtml(p.id)}</span>
-            ${draftBadge}
-          </span>
-          <span class="saved-persona-name">${escapeHtml(p.name)}</span>
-        </div>
-        <div class="saved-persona-actions">
-          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();${onClick}">${loadLabel}</button>
-          <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletePersona('${p.id}')">削除</button>
-        </div>
-      </div>
-    `}).join("");
-  } catch (err) { container.innerHTML = '<span style="color:var(--error)">読み込み失敗</span>'; }
-}
+    container.replaceChildren();
+    if (!personas.length) {
+      const empty = document.createElement("span");
+      empty.className = "text-muted";
+      empty.textContent = "登録済みペルソナはありません";
+      container.appendChild(empty);
+      return;
+    }
 
+    personas.forEach(p => {
+      const personaId = String(p.id ?? "");
+      const isDraftOnly = p.status === "draft_only";
+      const hasDraft = isDraftOnly || Boolean(p.has_draft);
+      const loadPersona = () => isDraftOnly ? loadFormDraft(personaId) : loadDraft(personaId);
+      const card = document.createElement("div");
+      const main = document.createElement("div");
+      const meta = document.createElement("span");
+      const date = document.createElement("span");
+      const id = document.createElement("span");
+      const name = document.createElement("span");
+      const actions = document.createElement("div");
+      const loadButton = document.createElement("button");
+      const deleteButton = document.createElement("button");
+
+      card.className = "saved-persona-item" + (hasDraft ? " has-draft" : "");
+      card.addEventListener("click", loadPersona);
+      card.addEventListener("dblclick", () => deletePersona(personaId));
+      main.className = "saved-persona-main";
+      meta.className = "saved-persona-meta";
+      date.className = "saved-persona-date";
+      date.textContent = String(p.updated ?? "");
+      id.className = "saved-persona-id";
+      id.textContent = personaId;
+      meta.append(date, id);
+      if (hasDraft) {
+        const badge = document.createElement("span");
+        badge.className = "draft-badge";
+        badge.textContent = isDraftOnly ? "下書きのみ" : "下書きあり";
+        meta.appendChild(badge);
+      }
+      name.className = "saved-persona-name";
+      name.textContent = String(p.name ?? "");
+      main.append(meta, name);
+
+      actions.className = "saved-persona-actions";
+      loadButton.className = "btn btn-secondary btn-sm";
+      loadButton.textContent = isDraftOnly ? "下書き読込" : "読込";
+      loadButton.addEventListener("click", event => {
+        event.stopPropagation();
+        loadPersona();
+      });
+      deleteButton.className = "btn btn-danger btn-sm";
+      deleteButton.textContent = "削除";
+      deleteButton.addEventListener("click", event => {
+        event.stopPropagation();
+        deletePersona(personaId);
+      });
+      actions.append(loadButton, deleteButton);
+      card.append(main, actions);
+      container.appendChild(card);
+    });
+  } catch (err) {
+    const error = document.createElement("span");
+    error.className = "validation-error";
+    error.textContent = "読み込み失敗";
+    container.replaceChildren(error);
+  }
+}
 // ── SOUL.md → フォーム抽出 ──
 function setMatch(text, regex, fieldId) {
   const m = text.match(regex);

@@ -87,36 +87,35 @@ async function loadStyleOptions() {
 function renderStylePresets() {
   const listEl = document.getElementById('style-preset-list');
   if (!listEl) return;
-  listEl.innerHTML = '';
+  listEl.replaceChildren();
+
+  const addOption = (parent, value, text, checked = false) => {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    const caption = document.createElement('span');
+    radio.type = 'radio';
+    radio.name = 'style-preset';
+    radio.value = value;
+    radio.checked = checked;
+    radio.addEventListener('change', onStylePresetChange);
+    caption.textContent = text;
+    label.append(radio, caption);
+    parent.appendChild(label);
+    return label;
+  };
 
   if (personaStyleData.status === 'ok') {
-    // プリセットがある場合
     const presets = personaStyleData.presets || [];
     presets.forEach((p, i) => {
-      const label = document.createElement('label');
-      label.innerHTML = `
-        <input type="radio" name="style-preset" value="${p.id}" ${i === 0 ? 'checked' : ''}>
-        <span>${escapeHtml(p.label)}</span>
-        <small style="display:block;color:var(--text-dim);margin-top:4px;">
-          ${presetDescription(p.style)}
-        </small>
-      `;
-      listEl.appendChild(label);
+      const label = addOption(listEl, String(p.id ?? ''), String(p.label ?? ''), i === 0);
+      const description = document.createElement('small');
+      description.className = 'style-preset-description';
+      description.textContent = presetDescription(p.style);
+      label.appendChild(description);
     });
+    const customLabel = addOption(listEl, 'custom', t('styleCustom'));
+    customLabel.lastElementChild.dataset.i18n = 'styleCustom';
 
-    // カスタムオプション
-    const customLabel = document.createElement('label');
-    customLabel.innerHTML = `
-      <input type="radio" name="style-preset" value="custom">
-      <span data-i18n="styleCustom">${t('styleCustom')}</span>
-    `;
-    listEl.appendChild(customLabel);
-
-    document.querySelectorAll('input[name="style-preset"]').forEach(radio => {
-      radio.addEventListener('change', onStylePresetChange);
-    });
-
-    // デフォルト値設定
     const defaultStyle = personaStyleData.default_style || {};
     const vpEl = document.getElementById('setup-viewpoint');
     const psEl = document.getElementById('setup-person');
@@ -125,34 +124,34 @@ function renderStylePresets() {
     if (psEl) psEl.value = defaultStyle.person || 'first';
     if (nrEl) nrEl.value = defaultStyle.narration ? 'true' : 'false';
     updatePersonToggle();
-
   } else if (personaStyleData.status === 'needs_confirmation') {
-    // 推定結果あり
     const est = personaStyleData.estimate;
-    listEl.innerHTML = `
-      <div class="estimate-banner">
-        <p data-i18n="styleEstimated">SOUL.md から文体を推定しました</p>
-        <pre>${JSON.stringify(est, null, 2)}</pre>
-        <label>
-          <input type="radio" name="style-preset" value="estimated" checked>
-          <span data-i18n="useEstimated">この推定を使用する</span>
-        </label>
-        <label>
-          <input type="radio" name="style-preset" value="custom">
-          <span data-i18n="styleCustom">${t('styleCustom')}</span>
-        </label>
-    `;
-    document.querySelectorAll('input[name="style-preset"]').forEach(radio => {
-      radio.addEventListener('change', onStylePresetChange);
-    });
+    const banner = document.createElement('div');
+    const message = document.createElement('p');
+    const preview = document.createElement('pre');
+    banner.className = 'estimate-banner';
+    message.dataset.i18n = 'styleEstimated';
+    message.textContent = t('styleEstimated') || 'SOUL.md から文体を推定しました';
+    preview.textContent = JSON.stringify(est, null, 2);
+    banner.append(message, preview);
+    const estimatedLabel = addOption(banner, 'estimated', t('useEstimated') || 'この推定を使用する', true);
+    estimatedLabel.lastElementChild.dataset.i18n = 'useEstimated';
+    const customLabel = addOption(banner, 'custom', t('styleCustom'));
+    customLabel.lastElementChild.dataset.i18n = 'styleCustom';
+    listEl.appendChild(banner);
     selectedStyle = est;
-
   } else {
-    // 手動設定必須
-    listEl.innerHTML = `
-      <p style="color:var(--text-muted);" data-i18n="styleNoPreset">プリセットがありません。カスタム設定で指定してください。</p>
-      <input type="radio" name="style-preset" value="custom" checked style="display:none;">
-    `;
+    const message = document.createElement('p');
+    const radio = document.createElement('input');
+    message.className = 'text-muted';
+    message.dataset.i18n = 'styleNoPreset';
+    message.textContent = t('styleNoPreset') || 'プリセットがありません。カスタム設定で指定してください。';
+    radio.type = 'radio';
+    radio.name = 'style-preset';
+    radio.value = 'custom';
+    radio.checked = true;
+    radio.hidden = true;
+    listEl.append(message, radio);
     showCustomStyle();
   }
 }
