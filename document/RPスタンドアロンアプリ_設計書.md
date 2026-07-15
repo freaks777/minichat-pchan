@@ -95,7 +95,7 @@ F:\LLM\hermes-work\rp-standalone\
 │   ├── main.py                     # FastAPIエントリポイント
 │   ├── config.yaml
 │   ├── config.default.yaml          # デフォルト設定（日本語コメント完備）
-│   ├── server.log                   # RotatingFileHandler（10MB×3）
+│   ├── server.log                   # RotatingFileHandler（1MB×2）
 │   ├── core/
 │   │   ├── api.py                  # マルチプロバイダAPI呼び出し
 │   │   ├── history.py              # 履歴管理（JSONL追記専用、アトミック保存）
@@ -616,7 +616,7 @@ style:
 **起動引数**: `--debug`（DEBUGログ有効）、`--model MODEL_ID`（config.yamlのモデルを上書き）。
 **ポート**: 8765（`python main.py` → `uvicorn.run(app, host="127.0.0.1", port=8765)`）。
 **設定リセット**: `/api/config/reset` は `config.default.yaml` をコピーする方式。コード内にデフォルト値を重複管理しない。
-**ログ**: `RotatingFileHandler`（10MB×3世代）。長期運用でのログ肥大化を防止。
+**ログ**: `RotatingFileHandler`（1MB×2世代）。長期運用でのログ肥大化を防止。
 **フロントエンドURL**: クリーンURLで提供（`/sessions`, `/chat`, `/setup`, `/settings`, `/studio`）。`FileResponse` で `frontend/` 配下のHTMLを直接配信。CSS/JSは `/frontend/` マウントで従来通り。
 **共通ナビバー**: 全ページ上部に固定ナビバー（`#top-nav`）。`[セッション] [Studio] [設定] [EN/日本語]`。現在地は `.active` でハイライト。ページ間の戻るボタンは不要。
 
@@ -723,56 +723,22 @@ chroma:
 
 **未保存防止**: `beforeunload` イベントでドラフト未保存時にブラウザ確認ダイアログを表示。保存完了後に `currentDraft` をクリア。
 
-**ペルソナID**: 日付ベースのデフォルト値（`persona-20260706`）を自動入力。`[\w\-]+` でバリデーション。
+**ペルソナID**: 日付ベースのデフォルト値（`persona-20260706`）を自動入力。`[a-zA-Z0-9_-]+` でバリデーション。
 
 ---
 
-## 5. 将来プラグイン（雛形のみ、設計は概要レベルに留める）
+## 5. プラグイン拡張
 
-実装の優先度は低く、コア＋基本セットが安定してから着手する。
-
-### 5.1 voice（TTS/STT）
-
-- ローカル（VOICEVOX / faster-whisper）とクラウドAPIの切替構成、というアイデアのみ保持
-- hooks案: `on_user_message`（音声入力をテキスト化）, `on_response_complete`（応答を音声合成）
-
-### 5.2 image_gen（状況画像生成）
-
-- ボタン一つで状況を画像化、というアイデアのみ保持
-- `get_ui_slot()` でチャット画面にボタンを追加する想定
-
-### 5.3 quick_actions（クイックアクションボタン）
-
-- 固定＋動的提案のハイブリッド、表示モード切替（常時／折りたたみ）というアイデアのみ保持
-- `get_ui_slot()` でボタン群をチャット画面に追加する想定
-- 「怒る」「無視する」等のボタン定義はキャラごとのYAMLで管理する案を維持
+アプリはプラグイン機構（ + ）を備えており、hook を通じて機能を拡張可能。
+現在実装済みの基本セット（secrets / mail / watchdog / memory / session_log / persona_studio）に加え、
+将来プラグインの構想は  に記載。
 
 ---
 
-## 6. 実装手順（フェーズ分け、コア優先）
+## 6. 実装状況
 
-| フェーズ | 内容 | 状態 |
-|---|---|:--:|
-| **0** | プロジェクト雛形（FastAPI疎通確認） | ✅ 完了 |
-| **1** | コア: api.py / history.py / config.py / persona_manager.py + StyleProfile | ✅ 完了 |
-| **2** | コア: PluginManager + base.py（hook機構＋shutdown機構） | ✅ 完了 |
-| **3** | フロントSPA（5画面: sessions/session-setup/chat/settings/studio） | ✅ 完了 |
-| **4** | persona_studio プラグイン | ✅ 完了 |
-| **5** | コア強化: priority + SessionContext + 全7hook + lifespan shutdown | ✅ 完了 |
-| 6 | 基本セット: watchdog + mail | ✅ 完了 |
-| 7 | 基本セット: session_log | ✅ 完了 |
-| 8 | 基本セット: memory（ChromaDB + e5-small） | ✅ 完了 |
-| 9 | ~~基本セット: cost~~ | ⏭ スキップ |
-| 10 | 基本セット: secrets（機密情報マスキング、UI含む） | ✅ 完了 |
-| 11 | 起動時バリデーション + エラーコード i18n | ✅ 完了 |
-|| 12 | 将来プラグイン: quick_actions | 未着手 |
-|| 13 | 将来プラグイン: voice | 未着手 |
-|| 14 | 将来プラグイン: image_gen | 未着手 |
-|| — | **コア＋基本セット** | **✅ 全完了** |
-|| **15** | セッション管理拡張（ID・再開・履歴編集・truncate） | ✅ 完了 |
-|| **16** | watchdog デフォルト OFF + 無効時エスカレーション抑制 | ✅ 完了 |
-|| **17** | フロント: チャット履歴表示・編集・削除・再生成 | ✅ 完了 |
-|| **18** | フロント: セッション一覧「続きから」機能 | ✅ 完了 |
+基本セット全6プラグイン + コア機能は **すべて実装完了**。
+未着手・保留項目は `backlog.md` を参照。
 
 ---
 
@@ -826,40 +792,12 @@ chroma:
    └─→ [画面表示] ... デフォルトはマスク表示、ボタン押下で一時展開
 ```
 
-```python
-# plugins/secrets/secrets_manager.py
-class SecretsManager(PluginBase):
-    name = "secrets"
-    hooks = ["on_user_message", "on_build_context"]
-
-    def __init__(self):
-        self.store = load_secrets_store()  # ローカル平文ストア（同一PC前提）
-
-    def register(self, value: str, label: str = None) -> str:
-        """機密値を登録し、プレースホルダーを発行"""
-        token = f"{{{{secret:{generate_id()}}}}}"
-        self.store[token] = {"value": value, "label": label}
-        return token
-
-    def run(self, hook: str, data, ctx: dict):
-        if hook == "on_user_message":
-            # 入力欄で機密タグ付けされた部分をプレースホルダーに置換してから履歴に渡す
-            return self._mask_tagged_input(data)
-        if hook == "on_build_context":
-            # コンテキスト構築後も常にプレースホルダーのままであることを再確認（誤って実値混入していないか検証）
-            return self._assert_no_leak(data)
-
-    def reveal(self, token: str) -> str:
-        """表示用に実値を一時展開。フロントの『目』ボタンから呼ばれる"""
-        return self.store.get(token, {}).get("value", "[unknown]")
-```
+**実装**: `backend/plugins/secrets/plugin.py` — `SecretsPlugin` クラス。`register()` / `protect_text()` / `reveal()` / `get_entry()` を提供。ストアは `secrets_store.json`（一時ファイル置換でアトミック保存）。
 
 **適用範囲**
 
 1. **会話中の発言**: チャット入力欄の🔒ボタンから機密値を登録し、カーソル位置に `{{secret:N}}` を挿入。送信時、`on_user_message` hook で自動的に `{{s:}}` 構文も `{{secret:N}}` に変換され、実値は履歴・LLMに渡らない。
 2. **ペルソナ設定**: Studio の下書きには `{label, placeholder}` のみ保存。実値は `secrets_store.json` で管理。SOUL/SKILL 本文にはプレースホルダー（`{{secret:1}}` 等の数値ID形式）のみが残り、保存済みペルソナの再読込時に本文中のプレースホルダーが抽出される。`secrets:` ブロックによる YAML 定義は未実装。
-
-```
 
 ペルソナ本文（地の文）では `{{secret:1}}` のように数値IDのプレースホルダーを直接記述し、実値は別途`secrets_store`に保持する。LLMに送られるシステムプロンプトにはプレースホルダーのまま渡る。
 
@@ -875,7 +813,7 @@ class SecretsManager(PluginBase):
 
 ### 7.4 ペルソナIDのパストラバーサル対策
 
-`persona_id` は全エンドポイント入口で `validate_persona_id()`（`[\w\-]+` の正規表現マッチ）により検証される。`../` 等のパストラバーサル攻撃を防止し、`delete_persona` の `shutil.rmtree()` による任意ディレクトリ削除を防ぐ。バリデーションは以下に適用：
+`persona_id` は全エンドポイント入口で `validate_persona_id()`（`[a-zA-Z0-9_-]+` の正規表現マッチ）により検証される。`../` 等のパストラバーサル攻撃を防止し、`delete_persona` の `shutil.rmtree()` による任意ディレクトリ削除を防ぐ。バリデーションは以下に適用：
 
 - `main.py`: `switch_persona`, `get_persona_style`, `save_persona`, `load_persona`, `delete_persona`
 - `persona_manager.py`: `switch()`
@@ -903,20 +841,22 @@ class SecretsManager(PluginBase):
 
 ---
 
-## 8. プラグイン開発者向け文書
+## 8. プラグイン開発
 
-外部に頼らず自分でプラグインを書き足せるよう、最低限の開発ガイドを用意する。コアの実装が固まった段階（フェーズ4以降）で `docs/plugin_development.md` として整備する想定。
+プラグインは `PluginBase` を継承し、`config.yaml` の `plugins.enabled` に追加するだけで有効化される。
+詳細な開発ガイド（hook一覧・UIスロット・サンプルコード）は将来整備予定（`backlog.md` 参照）。
 
-### 8.1 文書に含める内容
+### 利用可能な hook（7種）
 
-- **PluginBaseの実装方法**: `name` / `hooks` の定義、`run()`の戻り値の扱い（dataを書き換えて返す／Noneで無変更）
-- **利用可能なhook一覧と発火タイミング**: `on_user_message` / `on_build_context` / `on_response_complete` / `on_session_end` それぞれが「会話ループのどの瞬間に」「どんなdata/ctxを受け取るか」を明記
-- **UIスロットの追加方法**: `get_ui_slot()` の戻り値仕様（ボタン1個追加したい場合、パネルを追加したい場合のサンプル）
-- **既存プラグインのコード例**: 基本セット（watchdog, memory, cost等）を「読めばわかるサンプル実装」として位置づけ、新規プラグイン作成時の雛形として案内
-- **config.yamlへの登録方法**: `plugins.enabled` への追加、プラグイン固有設定の置き場所のルール
-- **secretsプラグインとの連携方法**: 機密値を扱うプラグインを作る場合、`SecretsManager.register()`/`reveal()`をどう呼ぶか（7.2参照）
-- **ポート/外部プロセス利用時の注意**: image_gen/voiceのようにローカル外部サーバーと通信するプラグインを作る場合のポート割当ルール（7.3の表に追記する形で管理）
-- **テンプレート雛形ファイル**: `plugins/_template/` に最小限のひな形（`base.py`を継承した空実装）を同梱し、コピーして使えるようにする
+| hook | タイミング | data | 主な利用プラグイン |
+|------|-----------|------|-------------------|
+| `on_session_start` | セッション開始時 | `SessionContext` | watchdog（タイマーリセット） |
+| `on_user_message` | ユーザー入力直後 | `SessionContext` | secrets（マスキング）、watchdog（リセット） |
+| `on_build_context` | プロンプト構築直前 | `list[dict]`（messages） | memory（RAG検索注入）、secrets（リークチェック） |
+| `on_before_request` | API送信直前 | `list[dict]`（messages） | （予約） |
+| `on_response_complete` | AI応答完了後 | `str`（応答テキスト） | memory（記憶抽出）、session_log（ログ保存） |
+| `on_persona_switch` | ペルソナ切替時 | `SessionContext` | memory（コレクション切替） |
+| `on_session_end` | セッション終了時 | `SessionContext` | session_log、watchdog |
 
 ### 8.2 雛形ディレクトリ構成案
 
