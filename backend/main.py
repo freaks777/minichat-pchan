@@ -45,7 +45,7 @@ else:
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -229,14 +229,16 @@ if current_path.exists():
 # ── プラグインマネージャ ────────────────────────────────────────
 plugin_manager = PluginManager(config["plugins"]["enabled"])
 
+# 同時リクエストによるデータ競合を防止（複数タブ対策）
+_api_lock = asyncio.Lock()
+_cancel_event = asyncio.Event()  # 生成中断用
+
 # persona_studio にAPI設定を注入
 if plugin_manager.has("persona_studio"):
     ps = plugin_manager.get("persona_studio")
     ps.configure(config)
+    ps.set_cancel_event(_cancel_event)
     logger.info("persona_studio configured")
-
-# 同時リクエストによるデータ競合を防止（複数タブ対策）
-_api_lock = asyncio.Lock()
 
 
 # ── .last-response タイムスタンプファイル ──────────────────────
@@ -248,6 +250,40 @@ def touch_last_response():
     LAST_RESPONSE.write_text(str(time.time()))
 
 
+async def _run_with_disconnect_guard(request: Request, coro):
+    """切断検知付きで非同期処理を実行。
+
+    - 開始時に _cancel_event をクリア
+    - バックグラウンドで切断を監視 → 検知したら _cancel_event.set()
+    - 処理中に CancelledError が発生したら "client disconnected" エラーを返す
+    """
+    _cancel_event.clear()
+
+    async def _watch_disconnect():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("client disconnected, setting cancel event")
+                    _cancel_event.set()
+                    return
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+
+    watcher = asyncio.create_task(_watch_disconnect())
+    try:
+        return await coro
+    except asyncio.CancelledError:
+        logger.info("operation cancelled (client disconnect or user cancel)")
+        return {"error": "client disconnected"}
+    finally:
+        watcher.cancel()
+        try:
+            await watcher
+        except asyncio.CancelledError:
+            pass
+
+
 def rebuild_system_prompt():
     """スタイル変更後にシステムプロンプトを再構築する。"""
     global system_messages
@@ -257,6 +293,20 @@ def rebuild_system_prompt():
     state_text = _load_session_state()
     if state_text:
         system_messages.append({"role": "system", "content": state_text})
+
+    # ユーザー設定のグローバルシステムプロンプト（SOUL/Stateの後、制約の前）
+    # キャラクター定義より後ろに置くことで、出力形式・文体の最終指示として機能する
+    global_prompt = config.get("global_system_prompt", "").strip()
+    if global_prompt:
+        system_messages.append({"role": "system", "content": global_prompt})
+
+    # ツール呼び出し・コード実行の抑制
+    system_messages.append({"role": "system", "content": (
+        "【出力制約】\n"
+        "あなたはRPキャラクターです。ツール・関数呼び出し・コード実行は一切できません。\n"
+        "`````` や ```code``` ブロックを含む出力は禁止です。\n"
+        "常に自然言語の会話・描写のみを出力してください。"
+    )})
 
     # ---STATE--- 出力指示
     system_messages.append({"role": "system", "content": (
@@ -280,6 +330,11 @@ def _state_path() -> Path:
     """現在のセッションの状態ファイルパスを返す。"""
     sid = history.session_id or "00000000"
     return BASE_DIR.parent / "sessions" / persona_manager.active / f"{sid}_state.json"
+
+
+def _state_path_for(persona_id: str, session_id: str) -> Path:
+    """指定されたセッションの状態ファイルパスを返す。"""
+    return BASE_DIR.parent / "sessions" / persona_id / f"{session_id}_state.json"
 
 
 def _load_session_state() -> str:
@@ -340,6 +395,20 @@ def _diff_state(old: dict, new: dict) -> dict:
     return result
 
 
+def _get_current_memory_scope() -> str:
+    """.current-session から memory_scope を読み取る。未設定時は "session"。"""
+    current_path = BASE_DIR / ".current-session"
+    if current_path.exists():
+        try:
+            current = json.loads(current_path.read_text(encoding="utf-8"))
+            scope = current.get("memory_scope", "session")
+            if scope in ("session", "persona"):
+                return scope
+        except Exception:
+            pass
+    return "session"
+
+
 async def _dispatch_session_end_for_active():
     """現在アクティブなペルソナのセッション終了フックを発火。"""
     if persona_manager.active:
@@ -355,7 +424,9 @@ async def _dispatch_session_end_for_active():
 
 
 def _activate_session(persona_id: str, session_id: str,
-                      jsonl_path: Path | None = None):
+                      jsonl_path: Path | None = None,
+                      session_date: str = "",
+                      memory_scope: str = "session"):
     """ペルソナ切替 + 履歴ロード + スタイルロック + システムプロンプト再構築 + 状態保存。"""
     persona_manager.switch(persona_id)
     history.reload(persona_id)
@@ -366,7 +437,7 @@ def _activate_session(persona_id: str, session_id: str,
         history._messages = []
         history._turn_count = 0
 
-    history.set_session_id(session_id)
+    history.set_session_id(session_id, date=session_date)
 
     try:
         persona_manager.start_session()
@@ -380,7 +451,9 @@ def _activate_session(persona_id: str, session_id: str,
     session_state = {
         "persona_id": persona_id,
         "session_id": history.session_id,
+        "session_date": session_date or time.strftime("%Y-%m-%d"),
         "style": persona_manager.get_active_style(),
+        "memory_scope": memory_scope,
         "started_at": time.time(),
     }
     (BASE_DIR / ".current-session").write_text(
@@ -499,9 +572,18 @@ class StyleRequest(BaseModel):
     style: dict = Field(default_factory=dict)
 
 
+class ExtractionConfigRequest(BaseModel):
+    fallback_chain: list[dict] = Field(default_factory=list)
+
+
+class SystemPromptRequest(BaseModel):
+    system_prompt: str = ""
+
+
 class StartSessionRequest(BaseModel):
     persona_id: str = ""
     style_override: dict | None = None
+    memory_scope: str = "session"  # "session" | "persona"
 
 
 class ResumeSessionRequest(BaseModel):
@@ -533,6 +615,15 @@ class EstimateStyleRequest(BaseModel):
 
 class ExtractFieldsRequest(BaseModel):
     text: str
+
+
+class SaveDraftRequest(BaseModel):
+    persona_id: str
+    data: dict  # フォーム全状態
+
+
+class LoadDraftRequest(BaseModel):
+    persona_id: str
 
 
 class ConvertFreetextRequest(BaseModel):
@@ -745,9 +836,96 @@ async def set_style(req: StyleRequest):
     return {"status": "ok", "style": config["style"]}
 
 
+@app.post("/api/config/extraction")
+async def set_extraction_config(req: ExtractionConfigRequest):
+    """抽出タスク用フォールバックチェーンを更新。"""
+    chain = req.fallback_chain
+
+    # バリデーション
+    valid_providers = set(config.get("providers", {}).keys())
+    for entry in chain:
+        provider = entry.get("provider", "")
+        model = entry.get("model", "")
+        if not provider or not model:
+            return {"error": "各エントリに provider と model が必要です"}
+        if provider not in valid_providers:
+            return {"error": f"provider '{provider}' not found"}
+
+    def mutator(raw: dict):
+        raw.setdefault("extraction", {})["fallback_chain"] = chain
+
+    update_config_yaml(CONFIG_PATH, mutator)
+    mutator(config)  # メモリ上の config にも同じ変更を適用
+
+    logger.info("extraction fallback chain updated: %d entries", len(chain))
+    return {"status": "ok", "extraction": config.get("extraction", {})}
+
+
+@app.post("/api/config/system-prompt")
+async def set_system_prompt(req: SystemPromptRequest):
+    """ユーザー設定のグローバルシステムプロンプトを更新。"""
+    prompt = req.system_prompt
+
+    def mutator(raw: dict):
+        raw["global_system_prompt"] = prompt
+
+    update_config_yaml(CONFIG_PATH, mutator)
+    mutator(config)  # メモリ上の config にも同じ変更を適用
+
+    char_count = len(prompt)
+    logger.info("global system prompt updated: %d chars", char_count)
+    return {
+        "status": "ok",
+        "global_system_prompt": config.get("global_system_prompt", ""),
+        "char_count": char_count,
+    }
+
+
 @app.get("/api/persona/list")
-async def list_personas():
-    return persona_manager.list_personas()
+async def list_personas(status: str = ""):
+    """ペルソナ一覧を返す。
+
+    Query params:
+      status: "" (全件) / "saved" (完成済みのみ) / "draft_only" (下書きのみ)
+    """
+    personas = persona_manager.list_personas()
+    persona_ids = {p["id"] for p in personas}
+
+    # 下書きの有無を付与
+    draft_dir = BASE_DIR / "data" / "drafts"
+    for p in personas:
+        draft_path = draft_dir / f"{p['id']}.json"
+        p["has_draft"] = draft_path.exists()
+        p["status"] = "saved"
+
+    # 下書きのみ（SOUL/SKILLなし）のエントリを追加
+    if draft_dir.exists():
+        import json
+        for draft_file in draft_dir.glob("*.json"):
+            draft_id = draft_file.stem
+            if draft_id in persona_ids:
+                continue
+            try:
+                draft_data = json.loads(draft_file.read_text(encoding="utf-8"))
+                name = (draft_data.get("fields", {}).get("name", "") or
+                        draft_data.get("name", "") or draft_id)
+            except Exception:
+                name = draft_id
+            personas.append({
+                "id": draft_id,
+                "name": name,
+                "has_draft": True,
+                "status": "draft_only",
+                "updated": "",
+            })
+
+    # statusフィルタ
+    if status == "saved":
+        personas = [p for p in personas if p.get("status") == "saved"]
+    elif status == "draft_only":
+        personas = [p for p in personas if p.get("status") == "draft_only"]
+
+    return personas
 
 
 @app.get("/api/sessions/list")
@@ -810,10 +988,10 @@ async def list_sessions():
             pid = current.get("persona_id", "")
             sid = current.get("session_id", "")
             if pid and sid:
-                today = time.strftime("%Y-%m-%d")
+                sdate = current.get("session_date", time.strftime("%Y-%m-%d"))
                 # 既存リストに同じセッションがあるか確認
                 existing_ids = {s["id"] for s in sessions}
-                current_id = f"{pid}/{today}_{sid}"
+                current_id = f"{pid}/{sdate}_{sid}"
                 if current_id not in existing_ids:
                     pname = persona_map.get(pid, pid)
                     started = current.get("started_at", time.time())
@@ -850,10 +1028,18 @@ async def delete_session(persona_id: str, date: str):
         if current_path.exists():
             try:
                 current = json.loads(current_path.read_text(encoding="utf-8"))
-                if (current.get("persona_id") == persona_id
-                        and current.get("session_id") == date.split("_")[1]):
+                c_pid = current.get("persona_id", "")
+                c_sid = current.get("session_id", "")
+                c_date = current.get("session_date", "")
+                # date から session_id を抽出して比較、または session_date で比較
+                req_sid = date.split("_")[1] if "_" in date else date
+                if c_pid == persona_id and (c_sid == req_sid or f"{c_date}_{c_sid}" == date):
                     current_path.unlink()
                     logger.info("current session cleared: %s/%s", persona_id, date)
+                    # _state.json も掃除
+                    state_path = _state_path_for(persona_id, c_sid)
+                    if state_path.exists():
+                        state_path.unlink()
                     return {"status": "ok", "persona_id": persona_id, "date": date}
             except Exception:
                 pass
@@ -876,26 +1062,27 @@ async def delete_session(persona_id: str, date: str):
 
 @app.post("/api/persona/switch")
 async def switch_persona(req: SwitchPersonaRequest):
-    persona_id = req.persona_id
-    if not persona_id:
-        return {"error": "persona_id required"}
-    try:
-        validate_persona_id(persona_id)
-        persona_manager.switch(persona_id)
-        history.reload(persona_id)
-        rebuild_system_prompt()
-        # hook: ペルソナ切替（memory等の連動切替）
-        ctx = SessionContext(
-            persona_id=persona_id,
-            style=persona_manager.get_active_style() or {},
-            history=history,
-        )
-        await plugin_manager.dispatch("on_persona_switch", None, ctx)
-        logger.info("persona switched: %s", persona_id)
-        return {"active_persona": persona_id}
-    except ValueError as e:
-        logger.error("persona switch failed: %s", e)
-        return {"error": str(e)}
+    async with _api_lock:
+        persona_id = req.persona_id
+        if not persona_id:
+            return {"error": "persona_id required"}
+        try:
+            validate_persona_id(persona_id)
+            persona_manager.switch(persona_id)
+            history.reload(persona_id)
+            rebuild_system_prompt()
+            # hook: ペルソナ切替（memory等の連動切替）
+            ctx = SessionContext(
+                persona_id=persona_id,
+                style=persona_manager.get_active_style() or {},
+                history=history,
+            )
+            await plugin_manager.dispatch("on_persona_switch", None, ctx)
+            logger.info("persona switched: %s", persona_id)
+            return {"active_persona": persona_id}
+        except ValueError as e:
+            logger.error("persona switch failed: %s", e)
+            return {"error": str(e)}
 
 
 @app.get("/api/persona/{persona_id}/style")
@@ -930,78 +1117,83 @@ async def get_persona_style(persona_id: str):
 
 @app.post("/api/session/start")
 async def start_session(req: StartSessionRequest):
-    """セッションを開始し、スタイルをロックする。
+    async with _api_lock:
+        """セッションを開始し、スタイルをロックする。
 
-    Body: {"persona_id": "kyouka-detective", "style_override": {...}}
-    persona_id が指定された場合はペルソナを切り替える。
-    """
-    persona_id = req.persona_id.strip()
-    if persona_id:
-        # persona_id のバリデーション（パストラバーサル防止、防御的）
+        Body: {"persona_id": "kyouka-detective", "style_override": {...}}
+        persona_id が指定された場合はペルソナを切り替える。
+        """
+        persona_id = req.persona_id.strip()
+        if persona_id:
+            # persona_id のバリデーション（パストラバーサル防止、防御的）
+            try:
+                validate_persona_id(persona_id)
+            except ValueError as e:
+                return {"error": str(e)}
+
+            try:
+                # 前のセッションを終了
+                if persona_manager.active and persona_manager.active != persona_id:
+                    old_ctx = SessionContext(
+                        persona_id=persona_manager.active,
+                        style=persona_manager.get_active_style() or {},
+                        history=history,
+                    )
+                    await plugin_manager.dispatch("on_session_end", None, old_ctx)
+                persona_manager.switch(persona_id)
+                # 新規セッション → 履歴を空にする（続きからは resume を使う）
+                history.reload(persona_id)
+                history._messages = []
+                history._turn_count = 0
+                logger.info("persona switched: %s (new session)", persona_id)
+            except ValueError as e:
+                return {"error": str(e)}
+
+        # セッションID生成（一意性確保のためランダム2桁付与）
+        import random
+        session_id = time.strftime("%H%M%S") + str(random.randint(10, 99))
+        history.set_session_id(session_id)
+
+        # 新規セッション：JSONLファイルを空にする（同名の旧データが残っていた場合に備える）
+        history._save_full()
+
         try:
-            validate_persona_id(persona_id)
+            style = persona_manager.start_session(req.style_override)
         except ValueError as e:
             return {"error": str(e)}
 
-        try:
-            # 前のセッションを終了
-            if persona_manager.active and persona_manager.active != persona_id:
-                old_ctx = SessionContext(
-                    persona_id=persona_manager.active,
-                    style=persona_manager.get_active_style() or {},
-                    history=history,
-                )
-                await plugin_manager.dispatch("on_session_end", None, old_ctx)
-            persona_manager.switch(persona_id)
-            # 新規セッション → 履歴を空にする（続きからは resume を使う）
-            history.reload(persona_id)
-            history._messages = []
-            history._turn_count = 0
-            logger.info("persona switched: %s (new session)", persona_id)
-        except ValueError as e:
-            return {"error": str(e)}
+        rebuild_system_prompt()
 
-    # セッションID生成（一意性確保のためランダム2桁付与）
-    import random
-    session_id = time.strftime("%H%M%S") + str(random.randint(10, 99))
-    history.set_session_id(session_id)
+        # セッション状態をファイルに保存
+        memory_scope = req.memory_scope if req.memory_scope in ("session", "persona") else "session"
+        session_state = {
+            "persona_id": persona_manager.active,
+            "session_id": session_id,
+            "style": style,
+            "memory_scope": memory_scope,
+            "started_at": time.time(),
+        }
+        state_path = BASE_DIR / ".current-session"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(session_state, ensure_ascii=False, indent=2),
+                              encoding="utf-8")
 
-    # 新規セッション：JSONLファイルを空にする（同名の旧データが残っていた場合に備える）
-    history._save_full()
+        # hook: on_session_start
+        ctx = SessionContext(
+            persona_id=persona_manager.active,
+            style=style,
+            history=history,
+            memory_scope=memory_scope,
+        )
+        await plugin_manager.dispatch("on_session_start", ctx)
 
-    try:
-        style = persona_manager.start_session(req.style_override)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    rebuild_system_prompt()
-
-    # セッション状態をファイルに保存
-    session_state = {
-        "persona_id": persona_manager.active,
-        "session_id": session_id,
-        "style": style,
-        "started_at": time.time(),
-    }
-    state_path = BASE_DIR / ".current-session"
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(session_state, ensure_ascii=False, indent=2),
-                          encoding="utf-8")
-
-    # hook: on_session_start
-    ctx = SessionContext(
-        persona_id=persona_manager.active,
-        style=style,
-        history=history,
-    )
-    await plugin_manager.dispatch("on_session_start", ctx)
-
-    logger.info(
-        "session started | persona=%s style=%s",
-        persona_manager.active,
-        json.dumps(style, ensure_ascii=False),
-    )
-    return {"status": "ok", "persona_id": persona_manager.active, "style": style}
+        logger.info(
+            "session started | persona=%s style=%s",
+            persona_manager.active,
+            json.dumps(style, ensure_ascii=False),
+        )
+        return {"status": "ok", "persona_id": persona_manager.active, "style": style,
+                "memory_scope": memory_scope}
 
 
 @app.get("/api/session/current")
@@ -1037,6 +1229,7 @@ async def get_current_session():
         "session_id": state.get("session_id", ""),
         "style": style,
         "started_at": state.get("started_at", 0),
+        "memory_scope": state.get("memory_scope", "session"),
     }
 
 
@@ -1088,15 +1281,19 @@ async def _auto_resume_session(persona_id: str, session_id: str = "") -> str | N
 
         # 履歴のロードまたは初期化
         if session_id:
+            # session_id は "YYYY-MM-DD_HHMMSSRR" 形式
+            parts = session_id.split("_", 1)
+            sdate = parts[0] if len(parts) > 1 else ""
+            ssid = parts[1] if len(parts) > 1 else session_id
             jsonl_path = (
                 BASE_DIR.parent / "sessions" / persona_id /
                 f"{session_id}.jsonl"
             )
+            _activate_session(persona_id, ssid, jsonl_path, session_date=sdate)
         else:
             jsonl_path = None
-            session_id = time.strftime("%H%M%S") + str(__import__("random").randint(10, 99))
-
-        _activate_session(persona_id, session_id, jsonl_path)
+            ssid = time.strftime("%H%M%S") + str(__import__("random").randint(10, 99))
+            _activate_session(persona_id, ssid, jsonl_path)
         logger.info("auto-resume: success persona=%s session=%s", persona_id, history.session_id)
         return None
     except Exception as e:
@@ -1106,133 +1303,140 @@ async def _auto_resume_session(persona_id: str, session_id: str = "") -> str | N
 
 @app.post("/api/session/resume")
 async def resume_session(req: ResumeSessionRequest):
-    """既存セッションを再開する。
+    async with _api_lock:
+        """既存セッションを再開する。
 
-    Body: {"session_id": "kyouka-detective/2026-07-06_HHMMSSRR"}
-    """
-    raw_id = req.session_id.strip()
-    if not raw_id or "/" not in raw_id:
-        return {"error": "invalid session_id (format: persona_id/YYYY-MM-DD_HHMMSSRR)"}
+        Body: {"session_id": "kyouka-detective/2026-07-06_HHMMSSRR"}
+        """
+        raw_id = req.session_id.strip()
+        if not raw_id or "/" not in raw_id:
+            return {"error": "invalid session_id (format: persona_id/YYYY-MM-DD_HHMMSSRR)"}
 
-    persona_id, file_stem = raw_id.split("/", 1)
-    try:
-        validate_persona_id(persona_id)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    # ファイル名は常に YYYY-MM-DD_HHMMSSRR 形式
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", file_stem):
-        return {"error": "invalid session_id format (YYYY-MM-DD_HHMMSSRR required)"}
-
-    # 前のセッションを終了（別ペルソナに切り替わる場合のみ）
-    if persona_manager.active and persona_manager.active != persona_id:
-        await _dispatch_session_end_for_active()
-
-    jsonl_path = BASE_DIR.parent / "sessions" / persona_id / f"{file_stem}.jsonl"
-    session_id = file_stem.split("_", 1)[1]  # HHMMSSRR 部分を抽出
-
-    try:
-        _activate_session(persona_id, session_id, jsonl_path)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    if jsonl_path.exists():
-        logger.info("resume: loaded history from %s (%d messages)",
-                     jsonl_path.name, len(history._messages))
-    else:
-        logger.info("resume: new session (no existing file)")
-
-    # resumed_from を追記
-    current_path = BASE_DIR / ".current-session"
-    if current_path.exists():
+        persona_id, file_stem = raw_id.split("/", 1)
         try:
-            state = json.loads(current_path.read_text(encoding="utf-8"))
-            state["resumed_from"] = raw_id
-            current_path.write_text(json.dumps(state, ensure_ascii=False, indent=2),
-                                    encoding="utf-8")
-        except Exception:
-            pass
+            validate_persona_id(persona_id)
+        except ValueError as e:
+            return {"error": str(e)}
 
-    # hook: on_session_start
-    ctx = SessionContext(
-        persona_id=persona_id,
-        style=persona_manager.get_active_style() or {},
-        history=history,
-    )
-    await plugin_manager.dispatch("on_session_start", ctx)
+        # ファイル名は常に YYYY-MM-DD_HHMMSSRR 形式
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", file_stem):
+            return {"error": "invalid session_id format (YYYY-MM-DD_HHMMSSRR required)"}
 
-    logger.info("session resumed | persona=%s date=%s", persona_id, file_stem)
-    return {"status": "ok", "persona_id": persona_id,
-            "style": persona_manager.get_active_style()}
+        # 前のセッションを終了（別ペルソナに切り替わる場合のみ）
+        if persona_manager.active and persona_manager.active != persona_id:
+            await _dispatch_session_end_for_active()
+
+        jsonl_path = BASE_DIR.parent / "sessions" / persona_id / f"{file_stem}.jsonl"
+        session_id = file_stem.split("_", 1)[1]  # HHMMSSRR 部分を抽出
+        session_date = file_stem.split("_")[0]    # YYYY-MM-DD 部分
+
+        try:
+            _activate_session(persona_id, session_id, jsonl_path,
+                              session_date=session_date,
+                              memory_scope=_get_current_memory_scope())
+        except ValueError as e:
+            return {"error": str(e)}
+
+        if jsonl_path.exists():
+            logger.info("resume: loaded history from %s (%d messages)",
+                         jsonl_path.name, len(history._messages))
+        else:
+            logger.info("resume: new session (no existing file)")
+
+        # resumed_from を追記
+        current_path = BASE_DIR / ".current-session"
+        if current_path.exists():
+            try:
+                state = json.loads(current_path.read_text(encoding="utf-8"))
+                state["resumed_from"] = raw_id
+                current_path.write_text(json.dumps(state, ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+            except Exception:
+                pass
+
+        # hook: on_session_start
+        ctx = SessionContext(
+            persona_id=persona_id,
+            style=persona_manager.get_active_style() or {},
+            history=history,
+        )
+        await plugin_manager.dispatch("on_session_start", ctx)
+
+        logger.info("session resumed | persona=%s date=%s", persona_id, file_stem)
+        return {"status": "ok", "persona_id": persona_id,
+                "style": persona_manager.get_active_style()}
 
 
 @app.post("/api/session/update-message")
 async def update_message(req: UpdateMessageRequest):
-    """指定インデックスのメッセージ内容を更新する。
+    async with _api_lock:
+        """指定インデックスのメッセージ内容を更新する。
 
-    Body: {"index": 0, "content": "新しい内容", "persona_id": "...", "session_id": "..."}
-    """
-    await _auto_resume_session(req.persona_id, req.session_id)
-    index = req.index
-    content = req.content
-    if index < 0 or index >= len(history._messages):
-        return {"error": f"invalid index (0-{len(history._messages)-1})"}
-    history.update_message(index, content)
-    logger.info("message updated: index=%d", index)
-    return {"status": "ok"}
+        Body: {"index": 0, "content": "新しい内容", "persona_id": "...", "session_id": "..."}
+        """
+        await _auto_resume_session(req.persona_id, req.session_id)
+        index = req.index
+        content = req.content
+        if index < 0 or index >= len(history._messages):
+            return {"error": f"invalid index (0-{len(history._messages)-1})"}
+        history.update_message(index, content)
+        logger.info("message updated: index=%d", index)
+        return {"status": "ok"}
 
 
 @app.post("/api/session/delete-message")
 async def delete_message(req: DeleteMessageRequest):
-    """指定インデックスのメッセージを削除する。
+    async with _api_lock:
+        """指定インデックスのメッセージを削除する。
 
-    Body: {"index": 0, "persona_id": "...", "session_id": "..."}
-    ユーザーメッセージ削除時は対応するアシスタント応答も削除。
-    """
-    await _auto_resume_session(req.persona_id, req.session_id)
-    index = req.index
-    if index < 0 or index >= len(history._messages):
-        return {"error": f"invalid index (0-{len(history._messages)-1})"}
+        Body: {"index": 0, "persona_id": "...", "session_id": "..."}
+        ユーザーメッセージ削除時は対応するアシスタント応答も削除。
+        """
+        await _auto_resume_session(req.persona_id, req.session_id)
+        index = req.index
+        if index < 0 or index >= len(history._messages):
+            return {"error": f"invalid index (0-{len(history._messages)-1})"}
 
-    msg = history._messages[index]
-    role = msg.get("role", "")
-    deleted = 1
+        msg = history._messages[index]
+        role = msg.get("role", "")
+        deleted = 1
 
-    # ユーザーメッセージ削除 → 直後のアシスタント応答も削除
-    if role == "user" and index + 1 < len(history._messages):
-        next_msg = history._messages[index + 1]
-        if next_msg.get("role") == "assistant":
-            del history._messages[index + 1]
-            deleted = 2
+        # ユーザーメッセージ削除 → 直後のアシスタント応答も削除
+        if role == "user" and index + 1 < len(history._messages):
+            next_msg = history._messages[index + 1]
+            if next_msg.get("role") == "assistant":
+                del history._messages[index + 1]
+                deleted = 2
 
-    del history._messages[index]
-    history._save_full()
-    logger.info("message deleted: index=%d role=%s deleted=%d", index, role, deleted)
-    return {"status": "ok", "deleted": deleted}
+        del history._messages[index]
+        history._save_full()
+        logger.info("message deleted: index=%d role=%s deleted=%d", index, role, deleted)
+        return {"status": "ok", "deleted": deleted}
 
 
 @app.post("/api/session/truncate")
 async def truncate_history(req: TruncateRequest):
-    """指定インデックス以降のメッセージをすべて削除する。
+    async with _api_lock:
+        """指定インデックス以降のメッセージをすべて削除する。
 
-    Body: {"from_index": 3, "persona_id": "...", "session_id": "..."}
-    from_index のメッセージ自体も削除対象。
-    """
-    await _auto_resume_session(req.persona_id, req.session_id)
-    from_index = req.from_index
-    if from_index < 0 or from_index >= len(history._messages):
-        return {"error": f"invalid from_index (0-{len(history._messages)-1})"}
-    deleted = len(history._messages) - from_index
-    history._messages = history._messages[:from_index]
-    history._turn_count = sum(1 for m in history._messages if m.get("role") == "user")
-    history._save_full()
-    logger.info("history truncated: from_index=%d deleted=%d", from_index, deleted)
-    return {"status": "ok", "deleted": deleted}
+        Body: {"from_index": 3, "persona_id": "...", "session_id": "..."}
+        from_index のメッセージ自体も削除対象。
+        """
+        await _auto_resume_session(req.persona_id, req.session_id)
+        from_index = req.from_index
+        if from_index < 0 or from_index >= len(history._messages):
+            return {"error": f"invalid from_index (0-{len(history._messages)-1})"}
+        deleted = len(history._messages) - from_index
+        history._messages = history._messages[:from_index]
+        history._turn_count = sum(1 for m in history._messages if m.get("role") == "user")
+        history._save_full()
+        logger.info("history truncated: from_index=%d deleted=%d", from_index, deleted)
+        return {"status": "ok", "deleted": deleted}
 
 
 @app.post("/api/session/opening")
 async def generate_opening():
-    """SOUL.md の「開始時の状況」を読み取って返す。生成はペルソナ作成時に行う。"""
+    """SOUL.md の「開始時の状況」を読み取って返す。不在時は簡易フォールバック。"""
     if not persona_manager.active:
         return {"error": "no active persona"}
 
@@ -1242,19 +1446,37 @@ async def generate_opening():
 
     soul_md = soul_path.read_text(encoding="utf-8")
     import re
-    m = re.search(r"##\s*開始時の状況[\s\S]*?(?=\n##\s|\n---|$)", soul_md)
-    if not m:
-        return {"status": "ok", "opening": None}
 
-    scene = m.group(0).split("\n", 1)[1].strip() if "\n" in m.group(0) else ""
-    return {"status": "ok", "opening": scene}
+    # 「開始時の状況」セクションを探す
+    m = re.search(r"##\s*開始時の状況[\s\S]*?(?=\n##\s|\n---|$)", soul_md)
+    if m:
+        scene = m.group(0).split("\n", 1)[1].strip() if "\n" in m.group(0) else ""
+        if scene:
+            return {"status": "ok", "opening": scene}
+
+    # フォールバック: ペルソナ名から簡易生成
+    name_match = re.search(r"^#\s*(?:SOUL:\s*)?(.+?)(?:\n|$)", soul_md)
+    char_name = name_match.group(1).strip() if name_match else persona_manager.active
+    # 名前から不要な接頭辞を除去（「SOUL: 九条鏡花 — 私立探偵」→「九条鏡花」）
+    if "—" in char_name:
+        char_name = char_name.split("—")[0].strip()
+    opening = f"……{char_name}は、いつもと変わらぬ静けさの中で、次の訪問者を待っている。"
+
+    return {"status": "ok", "opening": opening}
 
 
 # ── persona_studio API ───────────────────────────────────────────
 
 
+@app.post("/api/persona-studio/cancel")
+async def cancel_studio():
+    """現在の抽出・生成を中断する。"""
+    _cancel_event.set()
+    return {"status": "ok"}
+
+
 @app.post("/api/persona-studio/estimate-style")
-async def estimate_style(req: EstimateStyleRequest):
+async def estimate_style(req: EstimateStyleRequest, request: Request):
     """SOUL.md テキストから文体を推定する。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
@@ -1262,7 +1484,12 @@ async def estimate_style(req: EstimateStyleRequest):
     if not soul_text:
         return {"error": "soul_md_text required"}
     try:
-        result = await plugin_manager.get("persona_studio").estimate_style_from_soul(soul_text)
+        result = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").estimate_style_from_soul(soul_text),
+        )
+        if isinstance(result, dict) and "error" in result:
+            return result
         return {"status": "ok", "estimate": result}
     except Exception as e:
         logger.error("estimate_style failed: %s", e)
@@ -1270,43 +1497,102 @@ async def estimate_style(req: EstimateStyleRequest):
 
 
 @app.post("/api/persona-studio/create-template")
-async def create_template(data: dict):
+async def create_template(data: dict, request: Request):
     """フォーム入力から SOUL.md / SKILL.md / style を生成。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
     try:
-        draft = await plugin_manager.get("persona_studio").create_via_template(data)
-        return {"status": "ok", "draft": draft}
+        result = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").create_via_template(data),
+        )
+        if isinstance(result, dict) and "error" in result:
+            return result
+        return {"status": "ok", "draft": result}
     except Exception as e:
         logger.error("create_template failed: %s", e)
         return {"error": str(e)}
 
 
 @app.post("/api/persona-studio/extract-fields")
-async def extract_fields(req: ExtractFieldsRequest):
+async def extract_fields(req: ExtractFieldsRequest, request: Request):
     """自由記述テキストから CharacterData フィールドを抽出（v3.3）。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
     try:
-        result = await plugin_manager.get("persona_studio").extract_fields(
-            req.text,
+        result = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").extract_fields(req.text),
         )
+        if isinstance(result, dict) and "error" in result:
+            return result
         return {"status": "ok", **result}
     except Exception as e:
         logger.error("extract_fields failed: %s", e)
         return {"error": str(e)}
 
 
+@app.post("/api/persona-studio/save-draft")
+async def save_draft(req: SaveDraftRequest):
+    """フォーム状態をドラフト保存。"""
+    if not plugin_manager.has("persona_studio"):
+        return {"error": "persona_studio plugin not loaded"}
+    try:
+        result = await plugin_manager.get("persona_studio").save_draft(
+            req.persona_id, req.data,
+        )
+        return result
+    except Exception as e:
+        logger.error("save_draft failed: %s", e)
+        return {"error": str(e)}
+
+
+@app.post("/api/persona-studio/load-draft")
+async def load_draft(req: LoadDraftRequest):
+    """保存済みドラフトを読込。"""
+    if not plugin_manager.has("persona_studio"):
+        return {"error": "persona_studio plugin not loaded"}
+    try:
+        data = await plugin_manager.get("persona_studio").load_draft(
+            req.persona_id,
+        )
+        if data is None:
+            return {"status": "not_found"}
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error("load_draft failed: %s", e)
+        return {"error": str(e)}
+
+
+@app.post("/api/persona-studio/delete-draft")
+async def delete_draft(req: LoadDraftRequest):
+    """ドラフトを削除。"""
+    if not plugin_manager.has("persona_studio"):
+        return {"error": "persona_studio plugin not loaded"}
+    try:
+        deleted = await plugin_manager.get("persona_studio").delete_draft(
+            req.persona_id,
+        )
+        return {"status": "ok", "deleted": deleted}
+    except Exception as e:
+        logger.error("delete_draft failed: %s", e)
+        return {"error": str(e)}
+
+
 @app.post("/api/persona-studio/convert-freetext")
-async def convert_freetext(req: ConvertFreetextRequest):
+async def convert_freetext(req: ConvertFreetextRequest, request: Request):
     """自由記述テキストをペルソナ形式に変換。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
     try:
-        draft = await plugin_manager.get("persona_studio").convert_freetext(
-            req.text,
-            req.style_override,
+        draft = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").convert_freetext(
+                req.text, req.style_override,
+            ),
         )
+        if isinstance(draft, dict) and "error" in draft:
+            return draft
         return {"status": "ok", "draft": draft}
     except Exception as e:
         logger.error("convert_freetext failed: %s", e)
@@ -1314,15 +1600,19 @@ async def convert_freetext(req: ConvertFreetextRequest):
 
 
 @app.post("/api/persona-studio/refine")
-async def refine_draft(req: RefineRequest):
+async def refine_draft(req: RefineRequest, request: Request):
     """ドラフトを指示に従って部分修正。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
     try:
-        revised = await plugin_manager.get("persona_studio").refine(
-            req.draft,
-            req.instruction,
+        revised = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").refine(
+                req.draft, req.instruction,
+            ),
         )
+        if isinstance(revised, dict) and "error" in revised:
+            return revised
         return {"status": "ok", "draft": revised}
     except Exception as e:
         logger.error("refine failed: %s", e)
@@ -1330,15 +1620,19 @@ async def refine_draft(req: RefineRequest):
 
 
 @app.post("/api/persona-studio/test-chat")
-async def test_chat(req: TestChatRequest):
+async def test_chat(req: TestChatRequest, request: Request):
     """ドラフトのペルソナでテスト会話。"""
     if not plugin_manager.has("persona_studio"):
         return {"error": "persona_studio plugin not loaded"}
     try:
-        response_text = await plugin_manager.get("persona_studio").test_chat(
-            req.draft,
-            req.message,
+        response_text = await _run_with_disconnect_guard(
+            request,
+            plugin_manager.get("persona_studio").test_chat(
+                req.draft, req.message,
+            ),
         )
+        if isinstance(response_text, dict) and "error" in response_text:
+            return response_text
         return {"status": "ok", "response": response_text}
     except Exception as e:
         logger.error("test_chat failed: %s", e)
@@ -1358,6 +1652,8 @@ async def save_persona(req: SavePersonaRequest):
         plugin_manager.get("persona_studio").save(
             PERSONAS_DIR, persona_id, req.draft
         )
+        # 下書きを自動削除（保存完了後は不要）
+        await plugin_manager.get("persona_studio").delete_draft(persona_id)
         logger.info("persona saved: %s", persona_id)
         return {"status": "ok", "persona_id": persona_id}
     except Exception as e:
@@ -1468,198 +1764,231 @@ async def delete_persona(persona_id: str):
 from fastapi.responses import StreamingResponse
 
 
+@app.post("/api/chat/cancel")
+async def cancel_chat():
+    """現在の生成を中断する。"""
+    _cancel_event.set()
+    return {"status": "ok"}
+
+
 @app.post("/api/chat")
 async def chat_sse(data: dict):
     """SSE ストリーミングでチャット応答を返す。"""
-    user_text = str(data.get("text", "")).strip()
-    if not user_text:
-        return {"error": "empty message"}
+    await _api_lock.acquire()
+    try:
+        user_text = str(data.get("text", "")).strip()
+        if not user_text:
+            _api_lock.release()
+            return {"error": "empty message"}
 
-    # DEBUG: active が空になっていないか監視
-    if not persona_manager.active:
-        logger.warning("chat_sse: persona_manager.active is empty! (None or '')")
+        # DEBUG: active が空になっていないか監視
+        if not persona_manager.active:
+            logger.warning("chat_sse: persona_manager.active is empty! (None or '')")
 
-    # persona_id 検証: 不一致なら自動でセッションを復元
-    expected_persona = str(data.get("persona_id", "")).strip()
-    expected_session = str(data.get("session_id", "")).strip()
-    err = await _auto_resume_session(expected_persona, expected_session)
-    if err:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=409, content={"error": "session_mismatch", "detail": err})
+        # persona_id 検証: 不一致なら自動でセッションを復元
+        expected_persona = str(data.get("persona_id", "")).strip()
+        expected_session = str(data.get("session_id", "")).strip()
+        err = await _auto_resume_session(expected_persona, expected_session)
+        if err:
+            from fastapi.responses import JSONResponse
+            _api_lock.release()
+            return JSONResponse(status_code=409, content={"error": "session_mismatch", "detail": err})
 
-    active_style = persona_manager.get_active_style()
-    logger.info("user input  | chars=%d", len(user_text))
-    logger.debug("user text   | %s", user_text[:80])
+        active_style = persona_manager.get_active_style()
+        logger.info("user input  | chars=%d", len(user_text))
+        logger.debug("user text   | %s", user_text[:80])
 
-    ctx = SessionContext(
-        persona_id=persona_manager.active,
-        style=active_style or {},
-        history=history,
-    )
-    ctx.user_input = user_text
-
-    # hook: on_user_message
-    result = await plugin_manager.dispatch("on_user_message", ctx)
-    if result is not None:
-        ctx = result
-
-    # 履歴にユーザー発言追加（再送信の場合は既に履歴にあるのでスキップ）
-    is_resend = data.get("resend", False)
-    if not is_resend:
-        history.add(user_text, "")
-    elif history._messages and history._messages[-1].get("role") == "user":
-        history._messages.append({"role": "assistant", "content": ""})
-
-    # hook: on_build_context
-    context_messages = history.get_context()
-    context_messages = await plugin_manager.dispatch(
-        "on_build_context", context_messages, ctx
-    )
-    context_messages = await plugin_manager.dispatch(
-        "on_before_request", context_messages, ctx
-    )
-
-    ctx_chars = sum(len(m.get("content", "")) for m in context_messages)
-    ctx_tokens_est = int(ctx_chars * 1.5)
-    logger.info(
-        "api call    | model=%s  msgs=%d  chars=%d  ~tokens=%d",
-        config["active_model"], len(context_messages), ctx_chars, ctx_tokens_est,
-    )
-
-    async def generate():
-        response_text = ""
-        state_buffer = ""  # ---STATE--- 以降を蓄積
-        in_state = False
-        pending = ""       # 前チャンク末尾（---STATE--- のチャンク跨ぎ検出用）
-        t_start = time.perf_counter()
-        model_info = {}
-        try:
-            async for chunk in chat_stream(context_messages, config, model_info):
-                response_text += chunk
-                if in_state:
-                    state_buffer += chunk
-                    continue
-
-                # pending バッファと結合して ---STATE--- を検出（チャンク跨ぎ対応）
-                combined = pending + chunk
-                if "---STATE---" in combined:
-                    parts = combined.split("---STATE---", 1)
-                    if parts[0]:
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': parts[0]}, ensure_ascii=False)}\n\n"
-                    in_state = True
-                    state_buffer = parts[1] if len(parts) > 1 else ""
-                    pending = ""
-                else:
-                    # 末尾12文字を保留（"---STATE---" の部分一致の可能性）
-                    safe_len = max(0, len(combined) - 12)
-                    if safe_len > 0:
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': combined[:safe_len]}, ensure_ascii=False)}\n\n"
-                    pending = combined[safe_len:]
-
-            # ストリーム終了時に保留中のテキストをフラッシュ
-            if pending and not in_state:
-                yield f"data: {json.dumps({'type': 'chunk', 'content': pending}, ensure_ascii=False)}\n\n"
-
-        except Exception as e:
-            elapsed = (time.perf_counter() - t_start) * 1000
-            logger.error("api error   | %.0fms  %s\n%s", elapsed, e, traceback.format_exc())
-            error_payload = {"type": "error"}
-            if isinstance(e, httpx.HTTPStatusError):
-                status = e.response.status_code
-                if status == 401:
-                    api_key_val = config.get("providers", {}).get(
-                        config.get("active_provider", ""), {}
-                    ).get("api_key", "")
-                    error_payload["code"] = "api_key_missing" if not api_key_val else "api_unauthorized"
-                else:
-                    error_payload["code"] = "api_unknown"
-            elif isinstance(e, httpx.TimeoutException):
-                error_payload["code"] = "api_timeout"
-            elif isinstance(e, httpx.NetworkError):
-                error_payload["code"] = "api_network"
-            elif isinstance(e, (httpx.LocalProtocolError,)):
-                error_payload["code"] = "api_key_missing"
-            else:
-                error_payload["code"] = "api_unknown"
-                error_payload["content"] = str(e)
-            yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
-            # エラー時は履歴から追加分を除去
-            if len(history._messages) >= 2:
-                history._messages.pop()
-                history._messages.pop()
-            return
-
-        elapsed = (time.perf_counter() - t_start) * 1000
-        requested = model_info.get("requested", "")
-        actual = model_info.get("actual", "")
-        mismatch = (
-            " ***DIFF***" if actual and not actual.startswith(
-                requested.rstrip(":free").split(":")[0]
-            ) else ""
+        ctx = SessionContext(
+            persona_id=persona_manager.active,
+            style=active_style or {},
+            history=history,
+            memory_scope=_get_current_memory_scope(),
         )
+        ctx.user_input = user_text
+
+        # hook: on_user_message
+        result = await plugin_manager.dispatch("on_user_message", ctx)
+        if result is not None:
+            ctx = result
+
+        # 履歴にユーザー発言追加（再送信の場合は既に履歴にあるのでスキップ）
+        is_resend = data.get("resend", False)
+        if not is_resend:
+            history.add(user_text, "")
+        elif history._messages and history._messages[-1].get("role") == "user":
+            history._messages.append({"role": "assistant", "content": ""})
+
+        # hook: on_build_context
+        context_messages = history.get_context()
+        context_messages = await plugin_manager.dispatch(
+            "on_build_context", context_messages, ctx
+        )
+        context_messages = await plugin_manager.dispatch(
+            "on_before_request", context_messages, ctx
+        )
+
+        ctx_chars = sum(len(m.get("content", "")) for m in context_messages)
+        ctx_tokens_est = int(ctx_chars * 1.5)
         logger.info(
-            "api done    | chars=%d  %.0fms  actual=%s%s",
-            len(response_text), elapsed, actual or "?", mismatch,
+            "api call    | model=%s  msgs=%d  chars=%d  ~tokens=%d",
+            config["active_model"], len(context_messages), ctx_chars, ctx_tokens_est,
         )
 
-        # ---STATE--- 抽出と保存
-        display_text = response_text
-        state_text = state_buffer.strip()
-        if state_text:
-            # 表示用テキストから ---STATE--- 以降を除去
-            if "---STATE---" in display_text:
-                display_text = display_text.split("---STATE---", 1)[0].rstrip()
+        async def generate():
+            try:
+                response_text = ""
+                state_buffer = ""
+                in_state = False
+                pending = ""
+                t_start = time.perf_counter()
+                model_info = {}
+                _cancel_event.clear()  # 前回のキャンセル状態をリセット
+                try:
+                    async for chunk in chat_stream(context_messages, config, model_info):
+                        if _cancel_event.is_set():
+                            yield f"data: {json.dumps({'type': 'cancelled'}, ensure_ascii=False)}\n\n"
+                            response_text += "\n[中断]"
+                            break
+                        response_text += chunk
+                        if in_state:
+                            state_buffer += chunk
+                            continue
 
-            # 状態をパース（フラットな key: value）
-            state_dict = {}
-            for line in state_text.split("\n"):
-                line = line.strip()
-                if not line.startswith("- ") or ":" not in line:
-                    continue
-                content = line[2:].strip()
-                key, _, val = content.partition(":")
-                key = key.strip()
-                val = val.strip()
-                if key:
-                    state_dict[key] = val
+                        # pending バッファと結合して ---STATE--- を検出（チャンク跨ぎ対応）
+                        combined = pending + chunk
+                        if "---STATE---" in combined:
+                            parts = combined.split("---STATE---", 1)
+                            if parts[0]:
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': parts[0]}, ensure_ascii=False)}\n\n"
+                            in_state = True
+                            state_buffer = parts[1] if len(parts) > 1 else ""
+                            pending = ""
+                        else:
+                            # 末尾12文字を保留（"---STATE---" の部分一致の可能性）
+                            safe_len = max(0, len(combined) - 12)
+                            if safe_len > 0:
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': combined[:safe_len]}, ensure_ascii=False)}\n\n"
+                            pending = combined[safe_len:]
 
-            if state_dict:
-                # 前回状態を読み込み
-                old_state = {}
-                sp = _state_path()
-                if sp.exists():
+                    # ストリーム終了時に保留中のテキストをフラッシュ
+                    if pending and not in_state:
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': pending}, ensure_ascii=False)}\n\n"
+
+                except Exception as e:
+                    elapsed = (time.perf_counter() - t_start) * 1000
+                    logger.error("api error   | %.0fms  %s\n%s", elapsed, e, traceback.format_exc())
+                    error_payload = {"type": "error"}
+                    if isinstance(e, httpx.HTTPStatusError):
+                        status = e.response.status_code
+                        if status == 401:
+                            api_key_val = config.get("providers", {}).get(
+                                config.get("active_provider", ""), {}
+                            ).get("api_key", "")
+                            error_payload["code"] = "api_key_missing" if not api_key_val else "api_unauthorized"
+                        else:
+                            error_payload["code"] = "api_unknown"
+                    elif isinstance(e, httpx.TimeoutException):
+                        error_payload["code"] = "api_timeout"
+                    elif isinstance(e, httpx.NetworkError):
+                        error_payload["code"] = "api_network"
+                    elif isinstance(e, (httpx.LocalProtocolError,)):
+                        error_payload["code"] = "api_key_missing"
+                    else:
+                        error_payload["code"] = "api_unknown"
+                        error_payload["content"] = str(e)
+                    yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
+                    # エラー時: ユーザー発言は保存、AI応答はエラーマーカー付きで保存
+                    if history._messages and history._messages[-1].get("role") == "assistant":
+                        history._messages[-1]["content"] = f"[ERROR: {error_payload.get('code', 'unknown')}]"
+                    history.save_turn()
+                    await plugin_manager.dispatch(
+                        "on_response_complete",
+                        f"[ERROR: {error_payload.get('code', 'unknown')}]",
+                        ctx,
+                    )
+                    return
+
+                elapsed = (time.perf_counter() - t_start) * 1000
+                requested = model_info.get("requested", "")
+                actual = model_info.get("actual", "")
+                # モデル名不一致はOpenRouter/OpenCode Zenでは正常（ランダムモデル/ステルスモデル）
+                provider_id = config.get("active_provider", "")
+                allow_mismatch = provider_id in ("openrouter", "opencode-zen")
+                mismatch = ""
+                if actual and not allow_mismatch:
+                    req_base = requested.rstrip(":free").split(":")[0]
+                    if not actual.startswith(req_base):
+                        mismatch = " ***DIFF***"
+                logger.info(
+                    "api done    | chars=%d  %.0fms  actual=%s%s",
+                    len(response_text), elapsed, actual or "?", mismatch,
+                )
+
+                # ---STATE--- 抽出と保存
+                display_text = response_text
+                state_text = state_buffer.strip()
+                if state_text:
+                    # 表示用テキストから ---STATE--- 以降を除去
+                    if "---STATE---" in display_text:
+                        display_text = display_text.split("---STATE---", 1)[0].rstrip()
+
+                    # 状態をパース（フラットな key: value）
+                    state_dict = {}
+                    for line in state_text.split("\n"):
+                        line = line.strip()
+                        if not line.startswith("- ") or ":" not in line:
+                            continue
+                        content = line[2:].strip()
+                        key, _, val = content.partition(":")
+                        key = key.strip()
+                        val = val.strip()
+                        if key:
+                            state_dict[key] = val
+
+                    if state_dict:
+                        # 前回状態を読み込み
+                        old_state = {}
+                        sp = _state_path()
+                        if sp.exists():
+                            try:
+                                old_state = json.loads(sp.read_text(encoding="utf-8"))
+                            except Exception:
+                                pass
+
+                        # 差分計算 → 保存 → フロントへ送信
+                        diff = _diff_state(old_state, state_dict)
+                        _save_session_state(state_dict)
+                        yield f"data: {json.dumps({'type': 'state', 'state': diff}, ensure_ascii=False)}\n\n"
+
+                # 履歴保存（---STATE--- を除いた本文のみ）
+                if history._messages and history._messages[-1]["role"] == "assistant":
+                    history._messages[-1]["content"] = display_text
+                history.save_turn()
+
+                touch_last_response()
+                logger.info("history save| file=%s", history.today_file.name)
+
+                # hook
+                await plugin_manager.dispatch("on_response_complete", response_text, ctx)
+
+                if plugin_manager.has("watchdog") and plugin_manager.get("watchdog")._enabled:
                     try:
-                        old_state = json.loads(sp.read_text(encoding="utf-8"))
+                        texts = await generate_escalation_texts(config)
+                        if texts:
+                            plugin_manager.get("watchdog").set_escalation_texts(texts)
                     except Exception:
                         pass
 
-                # 差分計算 → 保存 → フロントへ送信
-                diff = _diff_state(old_state, state_dict)
-                _save_session_state(state_dict)
-                yield f"data: {json.dumps({'type': 'state', 'state': diff}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
-        # 履歴保存（---STATE--- を除いた本文のみ）
-        if history._messages and history._messages[-1]["role"] == "assistant":
-            history._messages[-1]["content"] = display_text
-        history.save_turn()
 
-        touch_last_response()
-        logger.info("history save| file=%s", history.today_file.name)
+            finally:
+                _api_lock.release()
 
-        # hook
-        await plugin_manager.dispatch("on_response_complete", response_text, ctx)
-
-        if plugin_manager.has("watchdog") and plugin_manager.get("watchdog")._enabled:
-            try:
-                texts = await generate_escalation_texts(config)
-                if texts:
-                    plugin_manager.get("watchdog").set_escalation_texts(texts)
-            except Exception:
-                pass
-
-        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+        return StreamingResponse(generate(), media_type="text/event-stream")
+    except Exception:
+        _api_lock.release()
+        raise
 
 
 # ── フロントエンド（StaticFiles配信 + クリーンURL）─────────────

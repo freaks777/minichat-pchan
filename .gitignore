@@ -22,11 +22,13 @@ htmlcov/
 
 # Logs
 *.log
+backend/logs/api_debug/
 
 # User data
 /sessions/
 /session-log/
 /data/
+backend/data/
 
 # Personas（サンプルのみGit管理）
 /personas/*
@@ -43,6 +45,9 @@ backend/config.yaml
 
 # Generated
 project_code_dump.txt
+
+# Reference materials (user-managed, not tracked)
+/reference/
 
 # IDE
 .vscode/

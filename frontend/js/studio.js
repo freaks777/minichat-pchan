@@ -33,6 +33,8 @@ function onStyleChange() {
 }
 
 // ── UI補助 ──
+let _studioAbortController = null;
+
 function setLoading(active, msg) {
   _loading = active;
   document.getElementById("loading-overlay").style.display = active ? "flex" : "none";
@@ -42,10 +44,116 @@ function setLoading(active, msg) {
   });
 }
 
+function getStudioAbortController() {
+  _studioAbortController = new AbortController();
+  return _studioAbortController;
+}
+
+async function cancelStudioOp() {
+  if (_studioAbortController) _studioAbortController.abort();
+  try { await fetch("/api/persona-studio/cancel", { method: "POST" }); } catch (_) {}
+  setLoading(false);
+}
+
+
+// ── ドラフト保存/読込 ──
+
+async function saveFormDraft() {
+  const personaId = document.getElementById("t-persona-id").value.trim();
+  if (!personaId) { setStatus("ペルソナIDを入力してください", true); return; }
+
+  // 上書き確認: 既存の下書きと名前が異なる場合は確認
+  try {
+    const check = await fetch("/api/persona-studio/load-draft", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_id: personaId }),
+    });
+    const cr = await check.json();
+    if (cr.status === "ok" && cr.data) {
+      const oldName = (cr.data.fields || {}).name || "";
+      const newName = document.getElementById("t-name").value.trim();
+      if (oldName && newName && oldName !== newName) {
+        if (!confirm(`下書き「${oldName}」を「${newName}」で上書きしますか？`)) return;
+      }
+    }
+  } catch (_) { /* チェック失敗時はそのまま保存 */ }
+
+  const data = {
+    persona_id: personaId,
+    fields: {},
+    extra_sections: getExtraSections(),
+  };
+  ALL_T_FIELDS.forEach(id => {
+    const el = document.getElementById("t-" + id);
+    if (el) data.fields[id] = el.value;
+  });
+
+  try {
+    const res = await fetch("/api/persona-studio/save-draft", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_id: personaId, data }),
+    });
+    const r = await res.json();
+    if (r.error) { setStatus(r.error, true); return; }
+    if (r.existing_persona) {
+      showToast("⚠ 既存のペルソナと同じIDです。生成・保存時に上書きされます");
+    } else {
+      showToast("✓ 下書きを保存しました");
+    }
+  } catch (err) {
+    setStatus("保存失敗: " + err, true);
+  }
+}
+
+async function loadFormDraft(personaId) {
+  try {
+    const res = await fetch("/api/persona-studio/load-draft", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_id: personaId }),
+    });
+    const r = await res.json();
+    if (r.status === "not_found" || r.error) return false;
+
+    const d = r.data;
+    // persona_id を復元（ALL_T_FIELDS に含まれないため明示的）
+    if (d.persona_id) {
+      document.getElementById("t-persona-id").value = d.persona_id;
+      document.getElementById("d-persona-id").value = d.persona_id;
+    }
+    if (d.fields) {
+      Object.entries(d.fields).forEach(([k, v]) => {
+        const el = document.getElementById("t-" + k);
+        if (el) el.value = v || "";
+      });
+    }
+    if (d.extra_sections) setExtraSections(d.extra_sections);
+    // 本データの表示状態をクリア（下書きは生成前の状態）
+    document.getElementById("result-panel").style.display = "none";
+    document.getElementById("action-bar").style.display = "none";
+    hasDraft = false;
+    showToast("✓ 下書きを読み込みました");
+    return true;
+  } catch (err) {
+    console.error("loadDraft:", err);
+    return false;
+  }
+}
+
 function setStatus(msg, isError) {
   const bar = document.getElementById("status-bar");
   bar.textContent = msg;
   bar.style.color = isError ? "var(--error)" : "var(--text-dim)";
+}
+
+function resetForm(prefix) {
+  ALL_T_FIELDS.forEach(id => {
+    const el = document.getElementById(prefix + "-" + id);
+    if (el) el.value = "";
+  });
+  if (prefix === "t") {
+    document.getElementById("raw-text").value = "";
+    setExtraSections([]);
+  }
 }
 
 function showToast(msg, isError) {
@@ -89,7 +197,10 @@ function resetForm(prefix) {
     const el = document.getElementById(prefix + "-" + id);
     if (el) el.value = "";
   });
-  if (prefix === "t") document.getElementById("raw-text").value = "";
+  if (prefix === "t") {
+    document.getElementById("raw-text").value = "";
+    setExtraSections([]);
+  }
 }
 
 function resetAll() {
@@ -214,16 +325,14 @@ async function extractFields() {
   const text = document.getElementById("raw-text").value.trim();
   if (!text) { setStatus(t("statusNeedText"), true); return; }
   const personaId = document.getElementById("t-persona-id").value.trim() || defaultPersonaId();
-  setLoading(true, "抽出中...");
+  setLoading(true, "抽出中...（モデルにより1〜5分かかります）");
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 300000);  // 300秒（バッチ3回分）
+    const controller = getStudioAbortController();
     const res = await fetch("/api/persona-studio/extract-fields", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, persona_id: personaId }),
       signal: controller.signal,
     });
-    clearTimeout(timeout);
     const data = await res.json();
     if (data.error) { setLoading(false); setStatus(data.error, true); return; }
 
@@ -235,7 +344,7 @@ async function extractFields() {
     showToast("✓ フィールド抽出完了。必要に応じて編集し「フォームから生成」を押してください");
   } catch (err) {
     setLoading(false);
-    setStatus(err.name === "AbortError" ? "タイムアウト（300秒）: API応答なし" : "通信エラー: " + err, true);
+    setStatus(err.name === "AbortError" ? "タイムアウト（900秒）: API応答なし" : "通信エラー: " + err, true);
   }
 }
 
@@ -253,10 +362,11 @@ async function generateFromTemplate() {
   const name = document.getElementById("t-name").value.trim();
   if (!personaId) { setStatus("ペルソナIDは必須です", true); return; }
   if (!name) { setStatus("名前は必須です", true); return; }
-  setLoading(true, "生成中...");
+  setLoading(true, "生成中...（モデルにより1〜3分かかります）");
   try {
     const res = await fetch("/api/persona-studio/create-template", {
       method: "POST", headers: { "Content-Type": "application/json" },
+      signal: getStudioAbortController().signal,
       body: JSON.stringify({
         persona_id: personaId,
         fields: readTemplateFields(),
@@ -281,6 +391,7 @@ async function convertRawText() {
   try {
     const res = await fetch("/api/persona-studio/convert-freetext", {
       method: "POST", headers: { "Content-Type": "application/json" },
+      signal: getStudioAbortController().signal,
       body: JSON.stringify({ text, persona_id: personaId, style_override: getStyle() }),
     });
     const data = await res.json();
@@ -421,21 +532,34 @@ async function loadSavedPersonas() {
     const res = await fetch("/api/persona/list");
     const personas = await res.json();
     if (!personas.length) { container.innerHTML = '<span style="color:var(--text-dim)">登録済みペルソナはありません</span>'; return; }
-    container.innerHTML = personas.map(p => `
-      <div class="saved-persona-item" onclick="loadDraft('${p.id}')" ondblclick="deletePersona('${p.id}')">
+    container.innerHTML = personas.map(p => {
+      const isDraftOnly = p.status === "draft_only";
+      const draftBadge = isDraftOnly
+        ? '<span style="background:#eab308;color:#000;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">下書きのみ</span>'
+        : (p.has_draft
+          ? '<span style="background:#eab308;color:#000;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">下書きあり</span>'
+          : '');
+      const bg = isDraftOnly ? 'background:#2a2000;border-color:#eab308'
+               : p.has_draft ? 'background:#2a2000;border-color:#eab308'
+               : '';
+      const onClick = isDraftOnly ? `loadFormDraft('${p.id}')` : `loadDraft('${p.id}')`;
+      const loadLabel = isDraftOnly ? '下書き読込' : '読込';
+      return `
+      <div class="saved-persona-item" style="${bg}" onclick="${onClick}" ondblclick="deletePersona('${p.id}')">
         <div class="saved-persona-main">
           <span class="saved-persona-meta">
             <span class="saved-persona-date">${p.updated || ''}</span>
             <span class="saved-persona-id">${escapeHtml(p.id)}</span>
+            ${draftBadge}
           </span>
           <span class="saved-persona-name">${escapeHtml(p.name)}</span>
         </div>
         <div class="saved-persona-actions">
-          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();loadDraft('${p.id}')">読込</button>
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();${onClick}">${loadLabel}</button>
           <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletePersona('${p.id}')">削除</button>
         </div>
       </div>
-    `).join("");
+    `}).join("");
   } catch (err) { container.innerHTML = '<span style="color:var(--error)">読み込み失敗</span>'; }
 }
 
@@ -603,8 +727,18 @@ document.addEventListener("DOMContentLoaded", () => {
     rawText.addEventListener("input", updateCount);
     updateCount();
   }
+
+  // ドラフト自動読込（persona_id が入力済みの場合）
+  const initPersonaId = document.getElementById("t-persona-id").value.trim();
+  if (initPersonaId && initPersonaId !== defaultPersonaId()) {
+    loadFormDraft(initPersonaId);
+  }
 });
 
 window.addEventListener("beforeunload", (e) => {
+  // 抽出・生成中にリロードされた場合、バックエンドにキャンセル通知
+  if (_loading) {
+    navigator.sendBeacon("/api/persona-studio/cancel");
+  }
   if (hasDraft) e.preventDefault();
 });

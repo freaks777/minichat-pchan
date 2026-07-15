@@ -159,6 +159,7 @@
     <div class="btn-row">
       <button class="btn btn-primary" onclick="generateFromTemplate()" data-i18n="btnGenerate">フォームからSOUL/SKILL生成</button>
       <button class="btn btn-secondary btn-sm" onclick="resetForm('t')" data-i18n="btnClear">クリア</button>
+      <button class="btn btn-secondary btn-sm" onclick="saveFormDraft()">下書き保存</button>
     </div>
   </div>
 
@@ -212,11 +213,25 @@
 <div class="overlay" id="loading-overlay" style="display:none">
   <div class="spinner"></div>
   <span data-i18n="loadingText">生成中...</span>
+  <button class="btn btn-secondary" onclick="cancelStudioOp()" style="margin-top:16px" data-i18n="btnStop">停止</button>
 </div>
 
 <div id="toast" class="toast" style="display:none"></div>
 
 <script src="/frontend/js/i18n.js"></script>
 <script src="/frontend/js/studio.js"></script>
+<a id="back-to-top" href="#" title="トップへ">↑</a>
+<script>
+(function(){
+  const btn = document.getElementById('back-to-top');
+  window.addEventListener('scroll', () => {
+    btn.classList.toggle('visible', window.scrollY > 400);
+  });
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
 </body>
 </html>

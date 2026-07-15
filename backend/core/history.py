@@ -31,14 +31,16 @@ class History:
         self._system_messages: list[dict] = []
         self._turn_count = 0
         self._session_id: str = ""
+        self._session_date: str = ""  # セッション作成日（YYYY-MM-DD）、未設定時は今日
 
     @property
     def session_id(self) -> str:
         return self._session_id
 
-    def set_session_id(self, sid: str):
-        """セッションIDを設定。最初の保存前に呼ぶ。"""
+    def set_session_id(self, sid: str, date: str = ""):
+        """セッションIDと日付を設定。date未指定時は今日。"""
         self._session_id = sid
+        self._session_date = date if date else time.strftime("%Y-%m-%d")
 
     @property
     def persona_dir(self) -> Path:
@@ -46,10 +48,10 @@ class History:
 
     @property
     def session_file(self) -> Path:
-        """セッションのJSONLファイルパス（常に新形式）。"""
-        today = time.strftime("%Y-%m-%d")
+        """セッションのJSONLファイルパス。"""
+        date = self._session_date or time.strftime("%Y-%m-%d")
         sid = self._session_id or time.strftime("%H%M%S") + "00"
-        return self.persona_dir / f"{today}_{sid}.jsonl"
+        return self.persona_dir / f"{date}_{sid}.jsonl"
 
     @property
     def today_file(self) -> Path:

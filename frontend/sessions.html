@@ -36,5 +36,18 @@
 
 <script src="/frontend/js/i18n.js"></script>
 <script src="/frontend/js/sessions.js"></script>
+<a id="back-to-top" href="#" title="トップへ">↑</a>
+<script>
+(function(){
+  const btn = document.getElementById('back-to-top');
+  window.addEventListener('scroll', () => {
+    btn.classList.toggle('visible', window.scrollY > 400);
+  });
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
 </body>
 </html>

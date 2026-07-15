@@ -1,6 +1,12 @@
+# Core
 fastapi
 uvicorn
 httpx
 pyyaml
 python-dotenv
 ruamel.yaml
+
+# Optional: memory plugin (ChromaDB + embedding)
+# Install with: uv pip install sentence-transformers chromadb
+sentence-transformers
+chromadb

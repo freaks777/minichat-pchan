@@ -83,7 +83,11 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+let _continueLock = false;
+
 async function continueSession(sessionId) {
+  if (_continueLock) return;
+  _continueLock = true;
   try {
     const res = await fetch('/api/session/resume', {
       method: 'POST',
@@ -93,11 +97,13 @@ async function continueSession(sessionId) {
     const data = await res.json();
     if (data.error) {
       alert('エラー: ' + data.error);
+      _continueLock = false;
       return;
     }
     location.href = '/chat';
   } catch (err) {
     alert('接続エラー: ' + err.message);
+    _continueLock = false;
   }
 }
 
@@ -105,13 +111,17 @@ function startNewSession(personaId) {
   location.href = `/setup?persona=${encodeURIComponent(personaId)}`;
 }
 
+let _deleting = false;
+
 async function deleteSession(sessionId) {
+  if (_deleting) return;
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.includes('/')) {
     console.error('deleteSession: invalid sessionId', sessionId);
     alert('セッションIDが不正です。ページを再読み込みしてください。');
     return;
   }
   if (!confirm(t('confirmDelete') || 'このセッションを削除しますか？')) return;
+  _deleting = true;
   try {
     const [personaId, date] = sessionId.split('/');
     const res = await fetch(`/api/sessions/${encodeURIComponent(personaId)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
@@ -121,6 +131,8 @@ async function deleteSession(sessionId) {
   } catch (err) {
     console.error('deleteSession failed:', err);
     alert(t('deleteFailed') + ': ' + err.message);
+  } finally {
+    _deleting = false;
   }
 }
 

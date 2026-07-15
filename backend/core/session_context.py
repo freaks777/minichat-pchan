@@ -21,6 +21,9 @@ class SessionContext:
     style: dict
     history: object  # 'History'（循環import回避）
 
+    # セッション設定
+    memory_scope: str = "session"  # "session" | "persona"
+
     # プラグイン用拡張領域
     extras: dict = field(default_factory=dict)
 

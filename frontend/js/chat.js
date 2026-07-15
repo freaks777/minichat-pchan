@@ -8,7 +8,8 @@ let personaName = "...";
 let activePersonaId = "";
 let activeSessionId = "";
 let streaming = false;  // SSE ストリーミング中フラグ
-let currentState = {};   // 現在の状態 {拘束: "...", 負傷: "...", ...}
+let abortController = null;  // 中断用
+let currentState = {};   // 現在の状態
 
 function sessionParams() {
   return { persona_id: activePersonaId, session_id: activeSessionId };
@@ -144,6 +145,9 @@ async function init() {
 
 /* ── Session start ── */
 document.addEventListener("DOMContentLoaded", () => {
+  updateLangToggle();
+  i18nApply();
+
   // 旧来のスタイル選択パネル用（セッション未開始で /chat に直接来た場合のフォールバック）
   const startBtn = document.getElementById("start-btn");
   if (startBtn) {
@@ -174,11 +178,14 @@ async function showChatUI() {
   // 履歴を読み込んで表示
   await loadHistory();
 
-  // セッション状態を読み込み
+  // セッション状態を読み込み（空でもパネルを表示）
   fetch("/api/session/state")
     .then(r => r.json())
-    .then(d => { if (d.state && Object.keys(d.state).length) updateStatePanel(d.state); })
+    .then(d => updateStatePanel(d.state || {}))
     .catch(() => {});
+
+  // 状態パネルはデフォルトで表示
+  document.getElementById("state-panel").style.display = "block";
 
   // 新規セッションなら開始状況を自動生成
   if (new URLSearchParams(location.search).get("new") === "1") {
@@ -252,9 +259,16 @@ function addMessage(role, text, isError, index) {
   const roleLabel = role === "user" ? t("roleYou") : t("roleAssistant");
   const escaped = escapeHtml(text || "") || "...";
   const canEdit = index != null;
-  div.innerHTML = `<div class="role">${roleLabel}</div>
-                   <div class="text" data-index="${canEdit ? index : ''}">${escaped}</div>
-                   ${canEdit ? `<div class="msg-actions"><button class="btn-edit" data-action="edit">編集</button>${role === "user" ? '<button class="btn-edit" data-action="regenerate">再生成</button>' : ''}<button class="btn-edit" data-action="delete">削除</button></div>` : ''}`;
+  let actionsHtml = "";
+  if (canEdit) {
+    const editBtn = '<button class="btn-edit" data-action="edit">' + t("btnEdit") + '</button>';
+    const regenBtn = '<button class="btn-edit" data-action="regenerate">' + t("btnRegenerate") + '</button>';
+    const delBtn = '<button class="btn-edit" data-action="delete">' + t("btnDelete") + '</button>';
+    actionsHtml = '<div class="msg-actions">' + editBtn + (role === "user" ? regenBtn : "") + delBtn + '</div>';
+  }
+  div.innerHTML = '<div class="role">' + roleLabel + '</div>\n'
+                + '<div class="text" data-index="' + (canEdit ? index : "") + '">' + escaped + '</div>\n'
+                + actionsHtml;
 
   if (canEdit) {
     div.querySelector('[data-action="edit"]').addEventListener("click", () => startEdit(div));
@@ -357,8 +371,8 @@ async function startEdit(msgDiv) {
         // AI発言編集 → 編集済みとして表示
         textEl.textContent = newContent;
         const roleEl = msgDiv.querySelector(".role");
-        if (roleEl && !roleEl.textContent.includes("編集済")) {
-          roleEl.textContent += " [編集済]";
+        if (roleEl && !roleEl.textContent.includes(t('btnEdited'))) {
+          roleEl.textContent += ` ${t('btnEdited')}`;
         }
         if (actions) actions.style.display = "";
       }
@@ -474,12 +488,15 @@ function send(textOverride) {
   streaming = true;
   showTyping(true);
   document.getElementById("header-status").className = "status-dot streaming";
+  document.getElementById("stop-btn").style.display = "inline-block";
 
   // SSE ストリーミング受信
+  abortController = new AbortController();
   fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, resend: !!textOverride, persona_id: activePersonaId, session_id: activeSessionId }),
+    signal: abortController.signal,
   }).then(async (res) => {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -511,6 +528,8 @@ function send(textOverride) {
             currentDiv.querySelector(".text").textContent = "\u26a0\ufe0f " + msg;
           } else if (data.type === "state") {
             updateStatePanel(data.state);
+          } else if (data.type === "cancelled") {
+            currentDiv.querySelector(".text").textContent += "\n[中断]";
           }
         }
       }
@@ -523,11 +542,19 @@ function send(textOverride) {
     }
   }).finally(() => {
     streaming = false;
+    abortController = null;
     currentAssistantDiv = null;
     showTyping(false);
     document.getElementById("header-status").className = "status-dot connected";
+    document.getElementById("stop-btn").style.display = "none";
     input.disabled = false;
     document.getElementById("send-btn").disabled = false;
     input.focus();
   });
+}
+
+async function cancelChat() {
+  if (!abortController) return;
+  abortController.abort();
+  try { await fetch("/api/chat/cancel", { method: "POST" }); } catch (_) {}
 }

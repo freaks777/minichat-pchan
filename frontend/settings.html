@@ -23,6 +23,7 @@
 
   <div class="settings-tabs">
     <button class="tab-btn active" data-tab="provider" onclick="showTab('provider')" data-i18n="tabProvider">プロバイダ / モデル</button>
+    <button class="tab-btn" data-tab="extraction" onclick="showTab('extraction')" data-i18n="tabExtraction">抽出タスク用モデル</button>
     <button class="tab-btn" data-tab="watchdog" onclick="showTab('watchdog')" data-i18n="tabWatchdog">Watchdog</button>
     <button class="tab-btn" data-tab="style" onclick="showTab('style')" data-i18n="tabStyle">文体 / スタイル</button>
     <button class="tab-btn" data-tab="advanced" onclick="showTab('advanced')" data-i18n="tabAdvanced">詳細</button>
@@ -36,6 +37,7 @@
         <label data-i18n="labelProvider">プロバイダ</label>
         <select id="provider-select" onchange="onProviderChange()"></select>
       </div>
+      <p class="setting-hint" data-i18n="hintProvider">APIリクエストの送信先です。プロバイダを切り替えると利用可能なモデル一覧が変わります。</p>
       <p class="setting-hint model-list-hint">選択中のプロバイダで利用可能なモデル一覧です。編集後に「適用」を押すと保存されます。</p>
       <div class="setting-row">
         <label data-i18n="labelModel">モデル (1行1つ)</label>
@@ -46,6 +48,7 @@
         <label data-i18n="labelActiveModel">アクティブモデル</label>
         <select id="model-select" onchange="onActiveModelChange()"></select>
       </div>
+      <p class="setting-hint" data-i18n="hintActiveModel">チャット・RPで実際に使われるモデルです。変更後は「適用して再接続」で反映されます。</p>
       <div class="setting-row provider-status">
         <span><span data-i18n="currentProvider">プロバイダ</span>: <strong id="current-provider"></strong></span>
         <span><span data-i18n="currentModel">モデル</span>: <strong id="current-model"></strong></span>
@@ -59,6 +62,7 @@
         <label data-i18n="labelMaxTokens">Max Tokens</label>
         <input type="number" id="api-max-tokens" min="100" max="100000" step="100">
       </div>
+      <p class="setting-hint" data-i18n="hintMaxTokens">1回の応答で生成される最大トークン数（出力の長さの上限）。地の文が多いRPでは3000〜4000が目安。</p>
       <div class="setting-row">
         <label data-i18n="labelTemperature">Temperature</label>
         <input type="number" id="api-temperature" min="0" max="2" step="0.1">
@@ -73,6 +77,23 @@
     </section>
   </div>
 
+  <!-- Tab: Extraction Model -->
+  <div id="tab-extraction" class="tab-panel">
+    <section class="settings-section">
+      <h2 data-i18n="secExtractionChain">抽出タスク用フォールバックチェーン</h2>
+      <p class="setting-hint" data-i18n="hintExtractionChain">ペルソナスタジオのフィールド抽出・SOUL/SKILL生成で、上から順に試行します。最初に成功したモデルが使われます。全滅時はエラーになります。</p>
+
+      <div id="extraction-chain-list">
+        <!-- JSで動的に生成 -->
+      </div>
+
+      <button class="btn btn-secondary btn-sm" id="add-chain-entry-btn" data-i18n="btnAddChainEntry">＋ 優先枠を追加</button>
+      <p class="setting-hint" data-i18n="hintChainMax" style="margin-top:4px;">最大5つまで。空のまま保存するとデフォルト（チャット用モデル）が使われます。</p>
+
+      <button class="btn btn-primary" id="apply-extraction-btn" data-i18n="btnApply">適用</button>
+    </section>
+  </div>
+
   <!-- Tab: Watchdog -->
   <div id="tab-watchdog" class="tab-panel">
     <section class="settings-section">
@@ -84,6 +105,7 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
+      <p class="setting-hint" data-i18n="hintWatchdogEnabled">有効にすると、一定時間操作がない場合にメール通知を行います（Gmail SMTP設定が必要）。</p>
       <div class="setting-row">
         <label data-i18n="labelCheckInterval">チェック間隔 (秒)</label>
         <input type="number" id="watchdog-interval" min="10" max="3600" step="5">
@@ -149,6 +171,17 @@
     </section>
 
     <section class="settings-section">
+      <h2 data-i18n="secSystemPrompt">システムプロンプト（共通指示）</h2>
+      <p class="setting-hint" data-i18n="hintSystemPrompt">全モデル・全ペルソナの応答に適用される共通指示です。推奨は1500文字以内（長すぎると会話履歴が圧迫されます）。</p>
+      <div class="setting-row">
+        <textarea id="system-prompt-textarea" rows="6" class="model-textarea" placeholder="例: 応答は必ず日本語で。Markdownやコードブロックは使わない。口語体で。" oninput="onSystemPromptInput()"></textarea>
+      </div>
+      <p class="setting-hint" id="system-prompt-counter" style="margin-top:4px;">0 / 1500 文字</p>
+      <p class="setting-hint" id="system-prompt-warning" style="display:none; color: var(--warning);">⚠ 推奨上限を超えています。会話履歴が圧迫される可能性がありますが、このまま保存できます。</p>
+      <button class="btn btn-secondary" id="apply-system-prompt-btn" onclick="applySystemPrompt()" data-i18n="btnApply">適用</button>
+    </section>
+
+    <section class="settings-section">
       <h2 data-i18n="secPaths">パス設定（config.yaml で管理）</h2>
       <div class="setting-row readonly">
         <label data-i18n="labelChromaPath">ChromaDB パス</label>
@@ -175,5 +208,18 @@
 
 <script src="/frontend/js/i18n.js"></script>
 <script src="/frontend/js/settings.js"></script>
+<a id="back-to-top" href="#" title="トップへ">↑</a>
+<script>
+(function(){
+  const btn = document.getElementById('back-to-top');
+  window.addEventListener('scroll', () => {
+    btn.classList.toggle('visible', window.scrollY > 400);
+  });
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
 </body>
 </html>

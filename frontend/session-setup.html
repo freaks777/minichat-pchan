@@ -52,6 +52,16 @@
         </select>
       </div>
     </div>
+    <div style="margin-top:20px">
+      <label data-i18n="memoryScope" style="display:block;margin-bottom:4px">記憶スコープ</label>
+      <select id="memory-scope" style="width:100%">
+        <option value="session" data-i18n-value="optMemorySession">このセッションのみ</option>
+        <option value="persona" data-i18n-value="optMemoryPersona">全セッション共通</option>
+      </select>
+      <div class="setting-hint" data-i18n="hintMemoryScope" style="font-size:12px;color:var(--text-dim);margin-top:4px">
+        このセッションのみ：会話の記憶を他のセッションと共有しません。全セッション共通：同一キャラの全セッションで記憶を共有します。
+      </div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-secondary" id="back-to-persona" data-i18n="btnBack">戻る</button>
       <button class="btn btn-primary" id="start-session-btn" data-i18n="styleStart">セッション開始</button>

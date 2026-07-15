@@ -144,13 +144,14 @@ class MemoryPlugin(PluginBase):
 
         # ChromaDBに保存
         persona_id = ctx.persona_id
+        session_id = getattr(ctx.history, "session_id", "") or "unknown"
         ts = time.time()
         ids = [
-            f"{persona_id}_{int(ts)}_{i}"
+            f"{persona_id}_{session_id}_{int(ts)}_{i}"
             for i in range(len(facts))
         ]
         metadatas = [
-            {"persona_id": persona_id, "timestamp": ts}
+            {"persona_id": persona_id, "session_id": session_id, "timestamp": ts}
             for _ in facts
         ]
 
@@ -185,11 +186,21 @@ class MemoryPlugin(PluginBase):
             return messages
 
         try:
+            # memory_scope に応じてフィルタ切替
+            scope = getattr(ctx, "memory_scope", "session")
+            sid = getattr(ctx.history, "session_id", "") or ""
+            if scope == "session" and sid:
+                where = {"$and": [
+                    {"persona_id": ctx.persona_id},
+                    {"session_id": sid},
+                ]}
+            else:
+                where = {"persona_id": ctx.persona_id}
             results = await asyncio.to_thread(
                 self._collection.query,
                 query_embeddings=[query_emb],
                 n_results=3,
-                where={"persona_id": ctx.persona_id},
+                where=where,
             )
         except Exception as e:
             logger.error("memory: ChromaDB query failed (%s)", e)

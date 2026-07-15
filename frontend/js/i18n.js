@@ -24,6 +24,11 @@ const I18N = {
     optFirstPerson: "一人称",
     optThirdPerson: "三人称",
 
+    memoryScope: "記憶スコープ",
+    optMemorySession: "このセッションのみ",
+    optMemoryPersona: "全セッション共通",
+    hintMemoryScope: "このセッションのみ：会話の記憶を他のセッションと共有しません。全セッション共通：同一キャラの全セッションで記憶を共有します。",
+
     /* chat UI */
     headerNotConnected: "未接続",
     inputPlaceholder: "メッセージを入力...",
@@ -37,6 +42,12 @@ const I18N = {
     statusDisconnected: "切断 — ページ再読込で再接続",
     roleYou: "あなた",
     roleAssistant: "アシスタント",
+
+    btnEdit: "編集",
+    btnRegenerate: "再生成",
+    btnDelete: "削除",
+    btnEdited: "[編集済]",
+    btnStop: "停止",
 
     /* studio */
     studioTitle: "Persona Studio",
@@ -123,7 +134,7 @@ const I18N = {
     err_api_key_missing: "APIキーが設定されていません。.envファイルを確認してください。",
     err_api_unauthorized: "APIキーが無効です。.envファイルの値を確認してください。",
     err_api_network: "APIサーバーに接続できません。ネットワークを確認してください。",
-    err_api_timeout: "APIリクエストがタイムアウトしました。",
+    err_api_timeout: "応答が返ってきませんでした。モデルが混雑しているか、リクエストが重すぎる可能性があります。しばらく待ってから再試行してください。",
     err_api_unknown: "APIエラーが発生しました。サーバーログを確認してください。",
   },
 
@@ -149,6 +160,11 @@ const I18N = {
     optFirstPerson: "First-person",
     optThirdPerson: "Third-person",
 
+    memoryScope: "Memory Scope",
+    optMemorySession: "This session only",
+    optMemoryPersona: "All sessions",
+    hintMemoryScope: "This session only: memory is not shared across sessions. All sessions: memory is shared across all sessions with the same character.",
+
     headerNotConnected: "Not connected",
     inputPlaceholder: "Type a message...",
     sendButton: "Send",
@@ -161,6 +177,12 @@ const I18N = {
     statusDisconnected: "Disconnected — reload to reconnect",
     roleYou: "You",
     roleAssistant: "Assistant",
+
+    btnEdit: "Edit",
+    btnRegenerate: "Regenerate",
+    btnDelete: "Delete",
+    btnEdited: "[Edited]",
+    btnStop: "Stop",
 
     studioTitle: "Persona Studio",
     tabTemplate: "Fixed Form",
@@ -246,7 +268,7 @@ const I18N = {
     err_api_key_missing: "API key is not set. Check your .env file.",
     err_api_unauthorized: "API key is invalid. Check the value in your .env file.",
     err_api_network: "Cannot connect to API server. Check your network.",
-    err_api_timeout: "API request timed out.",
+    err_api_timeout: "No response received. The model may be busy or the request may be too heavy. Please wait and try again.",
     err_api_unknown: "An API error occurred. Check the server log.",
   }
 };

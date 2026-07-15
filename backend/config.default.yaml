@@ -84,6 +84,12 @@ api:
   temperature: 0.8      # 生成のランダム性（0.0=決定論的 〜 2.0=最大）
   timeout: 120          # APIリクエストのタイムアウト（秒）
 
+# ── システムプロンプト（全モデル・全ペルソナ共通） ──────────
+# 全モデル・全ペルソナの応答に適用される共通指示です。
+# 推奨 1500 文字以内（長すぎると会話履歴が圧迫されます）。
+# 空文字列の場合は何も注入しません。
+global_system_prompt: ""
+
 # ── セッション設定 ─────────────────────────────────────────────
 session:
   max_tokens: 32000     # 会話履歴として保持する最大トークン数（4000〜200000）
@@ -166,6 +172,22 @@ watchdog:
         次に目を覚ました時、君はこの沈黙を後悔するかもしれないね。
 
         '
+
+# ── 抽出・生成タスク用フォールバックチェーン ──────────────────
+# ペルソナスタジオのフィールド抽出・SOUL/SKILL生成で、
+# 上から順にプロバイダ/モデルを試行。成功した段で確定。
+# 未設定の場合は active_provider / active_model を使用。
+# 設定例（コピーしてお好みの順番に並べ替えてください）:
+# extraction:
+#   fallback_chain:
+#     - provider: opencode-go
+#       model: deepseek-v4-pro
+#     - provider: openrouter
+#       model: nvidia/nemotron-3-ultra-550b-a55b:free
+#     - provider: openrouter
+#       model: deepseek/deepseek-v4-pro
+extraction:
+  fallback_chain: []
 
 # ── スタイル設定 ───────────────────────────────────────────────
 # デフォルトの文体（ペルソナの style.yaml で上書き可能）

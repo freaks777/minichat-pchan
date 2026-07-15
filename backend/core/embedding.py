@@ -43,7 +43,7 @@ class SentenceTransformersProvider(EmbeddingProvider):
             self._model = SentenceTransformer(model_name, cache_folder=cache_folder)
         else:
             self._model = SentenceTransformer(model_name)
-        self._dim = self._model.get_sentence_embedding_dimension()  # get_embedding_dimension in newer versions
+        self._dim = self._model.get_embedding_dimension()
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         prefixed = [f"passage: {t}" for t in texts]

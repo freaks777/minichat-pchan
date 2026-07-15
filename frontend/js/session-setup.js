@@ -9,7 +9,7 @@ let personaStyleData = null;
 
 async function loadPersonas(presetPersonaId = null) {
   try {
-    const res = await fetch('/api/persona/list');
+    const res = await fetch('/api/persona/list?status=saved');
     const personas = await res.json();
 
     // URLパラメータでペルソナ指定がある場合 → キャラ選択画面をスキップ
@@ -159,9 +159,9 @@ function renderStylePresets() {
 
 function presetDescription(style) {
   if (!style) return '';
-  const v = { ai_character: 'AI視点', user_character: 'ユーザー視点' };
-  const p = { first: '一人称', third: '三人称' };
-  const n = style.narration ? '地の文あり' : '地の文なし';
+  const v = { ai_character: t('optAIChar'), user_character: t('optUserChar') };
+  const p = { first: t('optFirstPerson'), third: t('optThirdPerson') };
+  const n = style.narration ? t('optNarrationOn') : t('optNarrationOff');
   return `[${v[style.viewpoint] || style.viewpoint}・${n}${style.narration ? '・' + p[style.person] : ''}]`;
 }
 
@@ -231,6 +231,7 @@ async function startSession() {
       body: JSON.stringify({
         persona_id: selectedPersonaId,
         style_override: styleOverride,
+        memory_scope: document.getElementById('memory-scope')?.value || 'session',
       }),
     });
     const data = await res.json();
