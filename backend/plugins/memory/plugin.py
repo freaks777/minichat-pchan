@@ -5,9 +5,12 @@ on_build_context: ユーザー入力から類似記憶を検索 → システム
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import time
+import unicodedata
 from pathlib import Path
 
 from plugins.base import PluginBase
@@ -23,6 +26,37 @@ EXTRACT_FACTS_PROMPT = """以下の会話ログから、長期的に覚えてお
 {conversation}
 
 事実:"""
+
+LEADING_BULLET_RE = re.compile(
+    r"^\s*(?:(?:[・○\-*+])\s*|(?:\d+[.．)]\s*))+"
+)
+
+
+def normalize_fact(fact: str) -> str:
+    """重複比較用に表記揺れだけを保守的に正規化する。"""
+    normalized = unicodedata.normalize("NFKC", fact)
+    normalized = LEADING_BULLET_RE.sub("", normalized)
+    return " ".join(normalized.split()).strip()
+
+
+def deduplicate_facts(facts: list[str], existing: list[str] | None = None) -> list[str]:
+    """既存文書と入力順を維持しながら完全一致の重複を除外する。"""
+    seen = {normalize_fact(fact) for fact in (existing or [])}
+    unique = []
+    for fact in facts:
+        normalized = normalize_fact(fact)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def fact_id(persona_id: str, session_id: str, fact: str) -> str:
+    """同一ペルソナ・セッション・事実に決定的なIDを割り当てる。"""
+    separator = chr(0)
+    source = separator.join((persona_id, session_id, normalize_fact(fact)))
+    return "fact_" + hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 class MemoryPlugin(PluginBase):
@@ -128,43 +162,82 @@ class MemoryPlugin(PluginBase):
             logger.error("memory: fact extraction failed (%s)", e)
             return
 
-        # 事実をパース
-        facts = [line.strip("- ").strip() for line in result.split("\n")]
+        # 事実をパース。同一抽出結果内の重複はDB照合前に除外する。
+        facts = deduplicate_facts(result.split("\n"))
         facts = [f for f in facts if len(f) > 5 and "事実" not in f]
         if not facts:
             logger.info("memory: no facts extracted")
             return
 
-        # 埋め込み生成
-        try:
-            embeddings = self._embedding_provider.encode(facts)
-        except Exception as e:
-            logger.error("memory: embedding failed (%s)", e)
-            return
-
-        # ChromaDBに保存
         persona_id = ctx.persona_id
         session_id = getattr(ctx.history, "session_id", "") or "unknown"
+        await self._store_facts(facts, persona_id, session_id)
+
+    async def _store_facts(
+        self,
+        facts: list[str],
+        persona_id: str,
+        session_id: str,
+    ) -> int:
+        """同一セッションの既存文書を除外し、新規事実だけを保存する。"""
+        existing_documents = []
+        where = {"$and": [
+            {"persona_id": persona_id},
+            {"session_id": session_id},
+        ]}
+        try:
+            result = await asyncio.to_thread(
+                self._collection.get,
+                where=where,
+                include=["documents"],
+            )
+            existing_documents = result.get("documents", []) or []
+        except Exception as e:
+            # 決定的ID + upsertにより新形式データの重複は防げるため保存は継続する。
+            logger.error("memory: existing facts lookup failed (%s)", e)
+
+        new_facts = deduplicate_facts(facts, existing_documents)
+        if not new_facts:
+            logger.info(
+                "memory: skipped duplicate facts for %s/%s",
+                persona_id,
+                session_id,
+            )
+            return 0
+
+        try:
+            embeddings = await asyncio.to_thread(
+                self._embedding_provider.encode,
+                new_facts,
+            )
+        except Exception as e:
+            logger.error("memory: embedding failed (%s)", e)
+            return 0
+
         ts = time.time()
-        ids = [
-            f"{persona_id}_{session_id}_{int(ts)}_{i}"
-            for i in range(len(facts))
-        ]
+        ids = [fact_id(persona_id, session_id, fact) for fact in new_facts]
         metadatas = [
             {"persona_id": persona_id, "session_id": session_id, "timestamp": ts}
-            for _ in facts
+            for _ in new_facts
         ]
 
         try:
-            self._collection.add(
+            await asyncio.to_thread(
+                self._collection.upsert,
                 ids=ids,
                 embeddings=embeddings,
-                documents=facts,
+                documents=new_facts,
                 metadatas=metadatas,
             )
-            logger.info("memory: stored %d facts for %s", len(facts), persona_id)
+            logger.info(
+                "memory: stored %d new facts for %s",
+                len(new_facts),
+                persona_id,
+            )
+            return len(new_facts)
         except Exception as e:
-            logger.error("memory: ChromaDB add failed (%s)", e)
+            logger.error("memory: ChromaDB upsert failed (%s)", e)
+            return 0
 
     # ── 検索 ──────────────────────────────────────────────────
 

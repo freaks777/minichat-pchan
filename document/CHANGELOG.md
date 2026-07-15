@@ -1061,3 +1061,16 @@ DOM挿入監査で確認したF1〜F3を修正。
 
 **変更ファイル**: `backend/core/api.py`, `backend/main.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/backlog.md`
 **確認結果**: 回帰テスト26件成功、Python構文チェック成功、共有クライアント利用6経路・タイムアウト指定6経路を確認、`git diff --check` 問題なし
+
+### 22.14 memory同一事実の重複保存抑制（2026-07-16）
+
+- 同一ペルソナ・同一セッション内で、NFKC・先頭箇条書き／番号・空白を正規化した完全一致事実を保存対象から除外
+- 同一抽出結果内の重複と、旧タイムスタンプ形式IDで保存済みの既存文書を内容比較で検出
+- ペルソナID・セッションID・正規化済み事実のSHA-256から決定的IDを生成
+- ChromaDB保存を `add()` から `upsert()` へ変更し、同一IDの再保存を安全に処理
+- 既存文書取得、埋め込み生成、保存を `asyncio.to_thread()` へ移し、イベントループのブロックを回避
+- 全件重複時は埋め込み生成とDB書込をスキップ
+- 意味的類似と別セッション間の統合は、セッションスコープ検索との互換性を優先して対象外
+
+**変更ファイル**: `backend/plugins/memory/plugin.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+**確認結果**: 回帰テスト30件成功、Python構文チェック成功、既存照合・決定的ID・`upsert()`・全件重複スキップを確認、`git diff --check` 問題なし

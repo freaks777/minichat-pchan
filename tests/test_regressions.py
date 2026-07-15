@@ -23,6 +23,12 @@ from core.config import (
 )
 from core.history import History
 from core.persona_manager import PersonaManager
+from plugins.memory.plugin import (
+    MemoryPlugin,
+    deduplicate_facts,
+    fact_id,
+    normalize_fact,
+)
 from plugins.session_log.plugin import SessionLogPlugin
 from plugins.secrets.plugin import SecretsPlugin
 from plugins.persona_studio.plugin import PersonaStudioPlugin
@@ -265,6 +271,110 @@ class SessionLogTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8"
             )
             self.assertEqual(content.count("# Session Log"), 1)
+
+
+class MemoryDeduplicationTests(unittest.IsolatedAsyncioTestCase):
+    def test_normalization_and_batch_deduplication_are_conservative(self):
+        facts = [
+            "・  ユーザーはＡＢＣが好きである",
+            "1. ユーザーはABCが好きである",
+            "2026年に東京へ行った",
+            "2026年に大阪へ行った",
+        ]
+
+        unique = deduplicate_facts(facts)
+
+        self.assertEqual(unique, [
+            "ユーザーはABCが好きである",
+            "2026年に東京へ行った",
+            "2026年に大阪へ行った",
+        ])
+        self.assertEqual(normalize_fact("  *  複数\n 空白  "), "複数 空白")
+        self.assertEqual(
+            fact_id("persona", "session", unique[0]),
+            fact_id("persona", "session", facts[0]),
+        )
+        self.assertNotEqual(
+            fact_id("persona", "session-a", unique[0]),
+            fact_id("persona", "session-b", unique[0]),
+        )
+
+    async def test_store_facts_excludes_legacy_and_batch_duplicates(self):
+        collection = mock.MagicMock()
+        collection.get.return_value = {
+            "documents": ["ユーザーは紅茶が好きである"],
+        }
+        embedding = mock.MagicMock()
+        embedding.encode.return_value = [[0.1, 0.2]]
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+        plugin._embedding_provider = embedding
+
+        stored = await plugin._store_facts(
+            [
+                "・ ユーザーは紅茶が好きである",
+                "1. ユーザーは珈琲が好きである",
+                "ユーザーは珈琲が好きである",
+            ],
+            "persona",
+            "session",
+        )
+
+        self.assertEqual(stored, 1)
+        collection.get.assert_called_once_with(
+            where={"$and": [
+                {"persona_id": "persona"},
+                {"session_id": "session"},
+            ]},
+            include=["documents"],
+        )
+        embedding.encode.assert_called_once_with(["ユーザーは珈琲が好きである"])
+        collection.upsert.assert_called_once()
+        kwargs = collection.upsert.call_args.kwargs
+        self.assertEqual(kwargs["documents"], ["ユーザーは珈琲が好きである"])
+        self.assertEqual(
+            kwargs["ids"],
+            [fact_id("persona", "session", "ユーザーは珈琲が好きである")],
+        )
+
+    async def test_all_duplicates_skip_embedding_and_upsert(self):
+        collection = mock.MagicMock()
+        collection.get.return_value = {
+            "documents": ["ユーザーは紅茶が好きである"],
+        }
+        embedding = mock.MagicMock()
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+        plugin._embedding_provider = embedding
+
+        stored = await plugin._store_facts(
+            ["1. ユーザーは紅茶が好きである"],
+            "persona",
+            "session",
+        )
+
+        self.assertEqual(stored, 0)
+        embedding.encode.assert_not_called()
+        collection.upsert.assert_not_called()
+
+    async def test_lookup_failure_still_uses_deterministic_upsert(self):
+        collection = mock.MagicMock()
+        collection.get.side_effect = RuntimeError("lookup failed")
+        embedding = mock.MagicMock()
+        embedding.encode.return_value = [[0.1]]
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+        plugin._embedding_provider = embedding
+
+        with self.assertLogs("rp-standalone", level="ERROR"):
+            stored = await plugin._store_facts(
+                ["ユーザーは紅茶が好きである"],
+                "persona",
+                "session",
+            )
+
+        self.assertEqual(stored, 1)
+        collection.upsert.assert_called_once()
 
 
 class SecretsTests(unittest.TestCase):

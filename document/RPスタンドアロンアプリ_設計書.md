@@ -678,10 +678,13 @@ watchdog:
 - critical: False
 - `configure()`: `EmbeddingProvider` + ChromaDB `PersistentClient` + API設定の注入。`main.py` の lifespan で配線
 - `shutdown()`: ChromaDB参照・embedding provider を解放
-- 非同期化: `encode_query()` と `collection.query()` を `asyncio.to_thread()` でラップし、イベントループブロックを防止
+- 非同期化: 埋め込み生成・検索とChromaDBの `get()` / `query()` / `upsert()` を `asyncio.to_thread()` でラップし、イベントループブロックを防止
 - 事実抽出: 直近6000文字の会話からLLMが重要事実を抽出（`conversation[-6000:]`）
+- 重複抑制: 同一ペルソナ・同一セッション内で、NFKC正規化・先頭の箇条書き／番号除去・空白統一後に完全一致する事実を保存しない。抽出結果内の重複と旧ID形式の既存文書も照合対象とする
+- 保存ID: `persona_id`・`session_id`・正規化済み事実のSHA-256による決定的ID。保存は `upsert()` を使い、同じIDの再保存を安全に処理する
+- 重複範囲: 意味的類似や別セッション間の統合は行わず、セッションスコープ検索の互換性を維持する
 - `core/embedding.py`: `EmbeddingProvider` 抽象基底 + `SentenceTransformersProvider`（e5系モデル、`passage:`/`query:` プレフィックス、384次元、コサイン類似度）
-- コレクション: `rp_memory`（HNSW cosine、ペルソナIDでフィルタ）
+- コレクション: `rp_memory`（HNSW cosine、ペルソナID・セッションIDでフィルタ）
 - 設定: `config.yaml` の `chroma` セクション（`path`, `embedding_model`, `embedding_cache`）
 
 ```yaml
