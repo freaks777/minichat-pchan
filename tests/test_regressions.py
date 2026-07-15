@@ -223,6 +223,19 @@ class SecretsTests(unittest.TestCase):
 
         self.assertEqual(result[0]["content"], "value={{secret:7}}")
 
+    def test_short_values_require_explicit_secret_syntax(self):
+        plugin = SecretsPlugin()
+        plugin._secrets = {
+            "1": {"value": "A", "label": "one"},
+            "2": {"value": "AB", "label": "two"},
+            "3": {"value": "ABC", "label": "three"},
+        }
+
+        protected = plugin.protect_text("A AB ABC")
+
+        self.assertEqual(protected, "A AB {{secret:3}}")
+        self.assertEqual(plugin.protect_text("{{s: X}}"), "{{secret:1}}")
+
     def test_persona_studio_llm_messages_are_sanitized(self):
         secrets = SecretsPlugin()
         secrets._secrets = {"2": {"value": "private-value", "label": "test"}}

@@ -25,6 +25,9 @@ SECRET_INPUT_RE = re.compile(r"\{\{s:\s*(?:(\w+):\s*)?(.+?)\}\}")
 # プレースホルダー構文
 PLACEHOLDER_RE = re.compile(r"\{\{secret:(\d+)\}\}")
 
+# Avoid false positives by excluding short values from automatic replacement.
+MIN_AUTO_PROTECT_LENGTH = 3
+
 
 class SecretsPlugin(PluginBase):
     name = "secrets"
@@ -92,7 +95,8 @@ class SecretsPlugin(PluginBase):
         protected = self.normalize_text(text)
         values = sorted(
             ((entry.get("value", ""), f"{{{{secret:{sid}}}}}")
-             for sid, entry in self._secrets.items()),
+             for sid, entry in self._secrets.items()
+             if len(entry.get("value", "")) >= MIN_AUTO_PROTECT_LENGTH),
             key=lambda item: len(item[0]),
             reverse=True,
         )
