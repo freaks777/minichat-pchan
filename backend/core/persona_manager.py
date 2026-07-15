@@ -70,10 +70,12 @@ class PersonaManager:
     style.yaml が存在する場合は文体設定（StyleProfile）も管理する。
     """
 
-    def __init__(self, personas_dir: str | Path, default_persona: str):
+    def __init__(self, personas_dir: str | Path, default_persona: str,
+                 default_style: dict | None = None):
         self.personas_dir = Path(personas_dir).resolve()
         self.active: Optional[str] = None
         self.default_persona = default_persona
+        self.default_style = dict(default_style or {})
         self._locked_style: Optional[dict] = None  # セッション中ロックされたスタイル
 
     @property
@@ -177,7 +179,11 @@ class PersonaManager:
             ロックされたスタイル辞書
         """
         default = self.get_default_style()
-        if default is None:
+        base = dict(self.default_style)
+        if default is not None:
+            base.update(default.get("style", {}))
+
+        if not base:
             if style_override is None:
                 raise ValueError(
                     "style.yaml not found and no style_override provided. "
@@ -185,7 +191,6 @@ class PersonaManager:
                 )
             self._locked_style = style_override
         else:
-            base = default.get("style", {})
             self._locked_style = {**base, **(style_override or {})}
 
         return dict(self._locked_style)

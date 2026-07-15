@@ -11,6 +11,7 @@ hook:
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -55,10 +56,16 @@ class SecretsPlugin(PluginBase):
         if self._store_path:
             data = {"secrets": self._secrets, "next_id": self._next_id}
             self._store_path.parent.mkdir(parents=True, exist_ok=True)
-            self._store_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            temp_path = self._store_path.with_suffix(self._store_path.suffix + ".tmp")
+            try:
+                temp_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temp_path, self._store_path)
+            except Exception:
+                temp_path.unlink(missing_ok=True)
+                raise
 
     def register(self, value: str, label: str = "") -> str:
         """新しい機密値を登録し、プレースホルダーを返す。"""
@@ -66,16 +73,43 @@ class SecretsPlugin(PluginBase):
         self._next_id += 1
         self._secrets[sid] = {"value": value, "label": label}
         self._save()
-        logger.info("secrets: registered id=%s label=%s", sid, label or "-")
+        logger.info("secrets: registered id=%s", sid)
         return f"{{{{secret:{sid}}}}}"
 
+    def normalize_text(self, text: str) -> str:
+        """既存の {{s: label: value}} 構文をプレースホルダー化する。"""
+        def replacer(m):
+            label = (m.group(1) or "").strip()
+            value = m.group(2).strip()
+            if not value:
+                return m.group(0)
+            return self.register(value, label)
+
+        return SECRET_INPUT_RE.sub(replacer, text)
+
+    def protect_text(self, text: str) -> str:
+        """入力構文と登録済み実値を外部送信可能な表現へ置換する。"""
+        protected = self.normalize_text(text)
+        values = sorted(
+            ((entry.get("value", ""), f"{{{{secret:{sid}}}}}")
+             for sid, entry in self._secrets.items()),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        for value, placeholder in values:
+            if value:
+                protected = protected.replace(value, placeholder)
+        return protected
+
+    def get_entry(self, placeholder: str) -> dict | None:
+        """完全一致するプレースホルダーの登録情報を返す。"""
+        m = PLACEHOLDER_RE.fullmatch(placeholder)
+        return self._secrets.get(m.group(1)) if m else None
     def reveal(self, placeholder: str) -> str:
         """プレースホルダーから実値を取得。"""
-        m = PLACEHOLDER_RE.match(placeholder)
-        if m:
-            entry = self._secrets.get(m.group(1))
-            if entry:
-                return entry["value"]
+        entry = self.get_entry(placeholder)
+        if entry:
+            return entry["value"]
         return placeholder  # 不明なプレースホルダーはそのまま
 
     # ── hooks ──────────────────────────────────────────────────
@@ -91,14 +125,8 @@ class SecretsPlugin(PluginBase):
         """ユーザー入力から {{s:...}} を検出→登録→プレースホルダー化。"""
         text = ctx.user_input
 
-        def replacer(m):
-            label = (m.group(1) or "").strip()
-            value = m.group(2).strip()
-            if not value:
-                return m.group(0)
-            return self.register(value, label)
+        new_text = self.protect_text(text)
 
-        new_text = SECRET_INPUT_RE.sub(replacer, text)
         if new_text != text:
             ctx.user_input = new_text
             logger.debug("secrets: masked input")
@@ -119,11 +147,10 @@ class SecretsPlugin(PluginBase):
         leaked = 0
         for msg in messages:
             content = msg.get("content", "")
-            for real_value, placeholder in value_to_placeholder.items():
-                if real_value in content:
-                    content = content.replace(real_value, placeholder)
-                    leaked += 1
-            msg["content"] = content
+            protected = self.protect_text(content)
+            if protected != content:
+                leaked += 1
+            msg["content"] = protected
 
         if leaked:
             logger.warning("secrets: fixed %d leak(s) in context", leaked)

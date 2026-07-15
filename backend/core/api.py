@@ -262,6 +262,11 @@ async def _openai_stream(
                     chunk = json.loads(data)
                     if model_info is not None and model_info.get("actual") is None:
                         model_info["actual"] = chunk.get("model")
+                    choices = chunk.get("choices")
+                    # OpenAI-compatible APIs may send a usage-only final chunk
+                    # with an intentionally empty choices array.
+                    if choices == []:
+                        continue
                     delta = chunk["choices"][0].get("delta", {})
                     content = delta.get("content", "")
                     # DeepSeek推論モデル: reasoning_content（CoT）は表示せずバッファに溜める
@@ -358,17 +363,19 @@ def _anthropic_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
     """OpenAI形式のメッセージを Anthropic 形式に変換。
     Returns: (system_text, user/assistant messages)
     """
-    system_text = None
+    system_parts = []
     converted = []
     for m in messages:
         role = m.get("role", "")
         content = m.get("content", "")
         if role == "system":
-            system_text = content
+            if content:
+                system_parts.append(content)
         elif role == "assistant":
             converted.append({"role": "assistant", "content": content})
         elif role == "user":
             converted.append({"role": "user", "content": content})
+    system_text = "\n\n".join(system_parts) or None
     return system_text, converted
 
 
@@ -469,17 +476,19 @@ def _gemini_contents(messages: list[dict]) -> tuple[str | None, list[dict]]:
     """OpenAI形式のメッセージを Gemini 形式に変換。
     Returns: (system_text, contents list)
     """
-    system_text = None
+    system_parts = []
     contents = []
     for m in messages:
         role = m.get("role", "")
         content = m.get("content", "")
         if role == "system":
-            system_text = content
+            if content:
+                system_parts.append(content)
         elif role == "assistant":
             contents.append({"role": "model", "parts": [{"text": content}]})
         elif role == "user":
             contents.append({"role": "user", "parts": [{"text": content}]})
+    system_text = "\n\n".join(system_parts) or None
     return system_text, contents
 
 

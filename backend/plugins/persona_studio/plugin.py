@@ -354,6 +354,18 @@ class PersonaStudioPlugin(PluginBase):
         """API呼び出し用の設定を受け取る。main.py の起動時に呼ばれる。"""
         self._config = config
 
+    def set_secret_filter(self, secret_filter):
+        """外部API送信直前に機密値をプレースホルダー化する。"""
+        self._secret_filter = secret_filter
+
+    def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
+        if not getattr(self, "_secret_filter", None):
+            return messages
+        return [
+            {**message, "content": self._secret_filter(str(message.get("content", "")))}
+            for message in messages
+        ]
+
     def set_cancel_event(self, event):
         """キャンセル用 asyncio.Event を受け取る。"""
         self._cancel_event = event
@@ -408,7 +420,7 @@ class PersonaStudioPlugin(PluginBase):
                 provider=entry["provider"], model=entry["model"],
             )
             try:
-                result = await chat_sync(messages, config)
+                result = await chat_sync(self._sanitize_messages(messages), config)
                 if result and result.strip():
                     logger.info(
                         "%s fallback OK: %s (%d chars)",
@@ -449,7 +461,7 @@ class PersonaStudioPlugin(PluginBase):
                 provider=entry["provider"], model=entry["model"],
             )
             try:
-                raw = await chat_sync(messages, config)
+                raw = await chat_sync(self._sanitize_messages(messages), config)
                 if not raw or not raw.strip():
                     logger.warning("%s empty: %s", task_name, stage_label)
                     continue
@@ -487,7 +499,7 @@ class PersonaStudioPlugin(PluginBase):
         config = self._make_config(max_tokens=500)
         prompt = ESTIMATE_STYLE_PROMPT.format(soul_text=soul_md_text[:4000])
         messages = [{"role": "user", "content": prompt}]
-        result = await chat_sync(messages, config)
+        result = await chat_sync(self._sanitize_messages(messages), config)
         return _parse_json_response(result)
 
     # ── テンプレートフォーム → SOUL/SKILL ────────────────────
@@ -742,7 +754,7 @@ class PersonaStudioPlugin(PluginBase):
             instruction=instruction,
         )
         messages = [{"role": "user", "content": prompt}]
-        result = await chat_sync(messages, config)
+        result = await chat_sync(self._sanitize_messages(messages), config)
         parsed = _parse_json_response(result)
         return {
             "soul_md": parsed.get("soul_md", draft.get("soul_md", "")),
@@ -764,7 +776,7 @@ class PersonaStudioPlugin(PluginBase):
             message=message,
         )
         messages = [{"role": "user", "content": prompt}]
-        return await chat_sync(messages, config)
+        return await chat_sync(self._sanitize_messages(messages), config)
 
     # ── 保存 ──────────────────────────────────────────────────
 

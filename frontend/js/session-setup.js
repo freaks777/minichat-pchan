@@ -42,7 +42,7 @@ async function loadPersonas(presetPersonaId = null) {
 function renderPersonaGrid(personas) {
   const grid = document.getElementById('persona-grid');
   grid.innerHTML = personas.map(p => `
-    <div class="persona-card" data-id="${p.id}" tabindex="0">
+    <div class="persona-card" data-id="${escapeHtml(p.id)}" tabindex="0">
       <div class="persona-name">${escapeHtml(p.name)}</div>
       <div class="persona-id">${escapeHtml(p.id)}</div>
     </div>

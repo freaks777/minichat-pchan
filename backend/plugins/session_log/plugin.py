@@ -47,7 +47,7 @@ class SessionLogPlugin(PluginBase):
             return
 
         # 出力先
-        today = time.strftime("%Y-%m-%d")
+        today = getattr(history, "_session_date", "") or time.strftime("%Y-%m-%d")
         sid = getattr(history, "session_id", "") or f"{time.strftime('%H%M%S')}00"
         out_dir = self._log_dir / persona_id
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -80,12 +80,8 @@ class SessionLogPlugin(PluginBase):
             lines.append(content)
             lines.append(f"")
 
-        # 既存ファイルがあれば追記（区切り線を入れる）
-        existing = ""
-        if out_path.exists():
-            existing = out_path.read_text(encoding="utf-8") + "\n\n---\n\n"
-
-        out_path.write_text(existing + "\n".join(lines), encoding="utf-8")
+        # The rendered log contains the full history, so overwrite idempotently.
+        out_path.write_text("\n".join(lines), encoding="utf-8")
         logger.info(
             "session_log: saved %d messages → %s",
             len(messages), out_path,

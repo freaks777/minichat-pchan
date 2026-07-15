@@ -37,6 +37,24 @@
   <div class="tab-content active" id="tab-template">
     <p class="setting-hint" data-i18n="hintTemplate">全RP共通のキャラクター基本設定です。空欄は任意。</p>
 
+    <dialog id="studio-secret-dialog">
+      <form id="studio-secret-form" method="dialog">
+        <h3 data-i18n="secretDialogTitle">機密値を挿入</h3>
+        <label><span data-i18n="secretLabel">ラベル（任意）</span><input id="studio-secret-label" maxlength="100" autocomplete="off"></label>
+        <label><span data-i18n="secretValue">機密値</span><textarea id="studio-secret-value" maxlength="10000" required autocomplete="off"></textarea></label>
+        <div class="secret-dialog-actions">
+          <button id="studio-secret-cancel" type="button" data-i18n="secretCancel">キャンセル</button>
+          <button type="submit" data-i18n="secretInsert">挿入</button>
+        </div>
+      </form>
+    </dialog>
+    <fieldset id="studio-secrets-area" style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
+      <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="studioSecretsTitle">機密項目</legend>
+      <p class="setting-hint" data-i18n="studioSecretsHint">挿入先の項目を選択してから登録してください。実値は下書きやペルソナファイルに保存されません。</p>
+      <div id="studio-secrets-list"></div>
+      <button id="studio-secret-add" class="btn btn-secondary btn-sm" type="button" data-i18n="studioSecretAdd">🔒 機密値を登録・挿入</button>
+    </fieldset>
+
     <fieldset style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px">
       <legend style="font-size:13px;font-weight:700;color:var(--text-dim)" data-i18n="fieldsetBasic">基本情報</legend>
       <label data-i18n="fieldPersonaId">ペルソナID <span style="color:var(--error)">*必須</span></label>

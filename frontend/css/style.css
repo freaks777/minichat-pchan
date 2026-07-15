@@ -1080,3 +1080,71 @@ input.invalid {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+.secret-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  vertical-align: baseline;
+}
+.secret-token.revealed { border-color: var(--accent); }
+.secret-reveal {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.secret-reveal:disabled { opacity: 0.5; cursor: wait; }
+#input-area #secret-btn { padding: 10px 12px; }
+#secret-dialog,
+#studio-secret-dialog {
+  width: min(440px, calc(100vw - 32px));
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+#secret-dialog::backdrop,
+#studio-secret-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+#secret-form,
+#studio-secret-form { display: grid; gap: 12px; }
+#secret-form h3,
+#studio-secret-form h3 { margin: 0; }
+#secret-form label,
+#studio-secret-form label { display: grid; gap: 5px; color: var(--text-dim); }
+#secret-form input,
+#secret-form textarea,
+#studio-secret-form input,
+#studio-secret-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+}
+#secret-form textarea,
+#studio-secret-form textarea { min-height: 90px; resize: vertical; }
+.secret-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.secret-dialog-actions button { padding: 8px 14px; }
+
+.studio-secret-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+.studio-secret-label { overflow: hidden; text-overflow: ellipsis; }
+.studio-secret-row.revealed { border-color: var(--accent); }

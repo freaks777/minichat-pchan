@@ -122,7 +122,7 @@ async function init() {
 
     personaName = sessionData.persona_name;
     activePersonaId = sessionData.persona_id;
-    activeSessionId = sessionData.session_id || "";
+    activeSessionId = sessionData.session_key || sessionData.session_id || "";
 
     // セッション情報を永続化（ページ再読み込み時の復元用）
     localStorage.setItem("rp-session", JSON.stringify({
@@ -168,6 +168,14 @@ async function showChatUI() {
   document.getElementById("header-status").className = "status-dot connected";
   document.getElementById("msg-input").disabled = false;
   document.getElementById("send-btn").disabled = false;
+  fetch("/api/secrets/status")
+    .then(r => r.json())
+    .then(d => {
+      const button = document.getElementById("secret-btn");
+      button.style.display = d.enabled ? "" : "none";
+      button.disabled = !d.enabled;
+    })
+    .catch(() => { document.getElementById("secret-btn").style.display = "none"; });
 
   // モデル名を表示
   fetch("/api/config/model")
@@ -253,35 +261,108 @@ function showTyping(show) {
   document.getElementById("typing-indicator").style.display = show ? "block" : "none";
 }
 
+function pendingSecretStart(text) {
+  const start = text.lastIndexOf("{{");
+  if (start < 0) return -1;
+  const tail = text.slice(start);
+  if (/^\{\{secret:\d+\}\}$/.test(tail)) return -1;
+  return "{{secret:".startsWith(tail) || /^\{\{secret:\d*\}?$/.test(tail) ? start : -1;
+}
+
+function renderMessageText(textEl, rawText, streamPending = false) {
+  const raw = String(rawText || "");
+  textEl.dataset.rawText = raw;
+  textEl.textContent = "";
+  let visible = raw;
+  if (streamPending) {
+    const pendingAt = pendingSecretStart(raw);
+    if (pendingAt >= 0) visible = raw.slice(0, pendingAt);
+  }
+
+  const pattern = /\{\{secret:\d+\}\}/g;
+  let cursor = 0;
+  for (const match of visible.matchAll(pattern)) {
+    textEl.appendChild(document.createTextNode(visible.slice(cursor, match.index)));
+    const token = document.createElement("span");
+    token.className = "secret-token";
+    token.dataset.placeholder = match[0];
+
+    const masked = document.createElement("span");
+    masked.className = "secret-masked";
+    masked.textContent = "●●●●●";
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "secret-reveal";
+    reveal.textContent = "👁";
+    reveal.title = t("secretReveal");
+    reveal.addEventListener("click", async () => {
+      if (token.classList.contains("revealed")) {
+        masked.textContent = "●●●●●";
+        token.classList.remove("revealed");
+        return;
+      }
+      reveal.disabled = true;
+      try {
+        const res = await fetch("/api/secrets/reveal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ placeholder: token.dataset.placeholder }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "reveal failed");
+        masked.textContent = data.value;
+        token.classList.add("revealed");
+        if (data.label) token.title = data.label;
+      } catch (_) {
+        masked.textContent = t("secretUnavailable");
+      } finally {
+        reveal.disabled = false;
+      }
+    });
+    token.append(masked, reveal);
+    textEl.appendChild(token);
+    cursor = match.index + match[0].length;
+  }
+  textEl.appendChild(document.createTextNode(visible.slice(cursor)));
+  if (!visible && !streamPending) textEl.appendChild(document.createTextNode("..."));
+}
+
 function addMessage(role, text, isError, index) {
   const div = document.createElement("div");
   div.className = "msg " + role + (isError ? " error" : "");
-  const roleLabel = role === "user" ? t("roleYou") : t("roleAssistant");
-  const escaped = escapeHtml(text || "") || "...";
-  const canEdit = index != null;
-  let actionsHtml = "";
-  if (canEdit) {
-    const editBtn = '<button class="btn-edit" data-action="edit">' + t("btnEdit") + '</button>';
-    const regenBtn = '<button class="btn-edit" data-action="regenerate">' + t("btnRegenerate") + '</button>';
-    const delBtn = '<button class="btn-edit" data-action="delete">' + t("btnDelete") + '</button>';
-    actionsHtml = '<div class="msg-actions">' + editBtn + (role === "user" ? regenBtn : "") + delBtn + '</div>';
-  }
-  div.innerHTML = '<div class="role">' + roleLabel + '</div>\n'
-                + '<div class="text" data-index="' + (canEdit ? index : "") + '">' + escaped + '</div>\n'
-                + actionsHtml;
 
-  if (canEdit) {
-    div.querySelector('[data-action="edit"]').addEventListener("click", () => startEdit(div));
-    const regenBtn = div.querySelector('[data-action="regenerate"]');
-    if (regenBtn) regenBtn.addEventListener("click", () => regenerate(div));
-    div.querySelector('[data-action="delete"]').addEventListener("click", () => deleteMessage(div));
+  const roleEl = document.createElement("div");
+  roleEl.className = "role";
+  roleEl.textContent = role === "user" ? t("roleYou") : t("roleAssistant");
+
+  const textEl = document.createElement("div");
+  textEl.className = "text";
+  if (index != null) textEl.dataset.index = index;
+  renderMessageText(textEl, text || "");
+  div.append(roleEl, textEl);
+
+  if (index != null) {
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+    const addAction = (action, label, handler) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn-edit";
+      button.dataset.action = action;
+      button.textContent = label;
+      button.addEventListener("click", () => handler(div));
+      actions.appendChild(button);
+    };
+    addAction("edit", t("btnEdit"), startEdit);
+    if (role === "user") addAction("regenerate", t("btnRegenerate"), regenerate);
+    addAction("delete", t("btnDelete"), deleteMessage);
+    div.appendChild(actions);
   }
 
   document.getElementById("log").appendChild(div);
   document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
   return div;
 }
-
 function escapeHtml(str) {
   if (!str) return "";
   return String(str)
@@ -296,6 +377,10 @@ function reindexMessages() {
   document.querySelectorAll("#log .msg .text[data-index]").forEach((el, i) => {
     el.dataset.index = i;
   });
+}
+
+function secretPlaceholders(text) {
+  return String(text || "").match(/\{\{secret:\d+\}\}/g) || [];
 }
 
 async function startEdit(msgDiv) {
@@ -313,7 +398,7 @@ async function startEdit(msgDiv) {
 
   const textEl = msgDiv.querySelector(".text");
   if (!textEl || textEl.querySelector("textarea")) return;
-  const orig = textEl.textContent;
+  const orig = textEl.dataset.rawText || textEl.textContent;
   const isUser = msgDiv.classList.contains("user");
 
   // アクション隠す
@@ -330,6 +415,13 @@ async function startEdit(msgDiv) {
   const save = async () => {
     const newContent = ta.value;
     if (newContent === orig) { restore(); return; }
+    const originalSecrets = secretPlaceholders(orig);
+    const updatedSecrets = secretPlaceholders(newContent);
+    if (originalSecrets.some(token => !updatedSecrets.includes(token))
+        && !confirm(t("secretRemovedWarning"))) {
+      ta.focus();
+      return;
+    }
     try {
       const res = await fetch("/api/session/update-message", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -348,7 +440,7 @@ async function startEdit(msgDiv) {
 
       if (isUser) {
         // ユーザー発言編集 → 以降の履歴を削除して再生成
-        textEl.textContent = newContent;
+        renderMessageText(textEl, newContent);
         if (actions) actions.style.display = "";
 
         // DOMから後続メッセージを削除
@@ -369,7 +461,7 @@ async function startEdit(msgDiv) {
         send(newContent);
       } else {
         // AI発言編集 → 編集済みとして表示
-        textEl.textContent = newContent;
+        renderMessageText(textEl, newContent);
         const roleEl = msgDiv.querySelector(".role");
         if (roleEl && !roleEl.textContent.includes(t('btnEdited'))) {
           roleEl.textContent += ` ${t('btnEdited')}`;
@@ -381,7 +473,7 @@ async function startEdit(msgDiv) {
     }
   };
 
-  const restore = () => { textEl.textContent = orig; if (actions) actions.style.display = ""; };
+  const restore = () => { renderMessageText(textEl, orig); if (actions) actions.style.display = ""; };
 
   ta.addEventListener("blur", save);
   ta.addEventListener("keydown", (e) => {
@@ -394,7 +486,7 @@ async function regenerate(msgDiv) {
   const textEl = msgDiv.querySelector(".text");
   const idx = parseInt(textEl?.dataset.index);
   if (isNaN(idx)) return;
-  const text = textEl.textContent;
+  const text = textEl.dataset.rawText || textEl.textContent;
 
   // DOMから後続メッセージを削除
   let next = msgDiv.nextElementSibling;
@@ -446,6 +538,45 @@ document.addEventListener("DOMContentLoaded", () => {
   const msgInput = document.getElementById("msg-input");
   document.getElementById("send-btn").addEventListener("click", () => send());
 
+  const secretDialog = document.getElementById("secret-dialog");
+  const secretButton = document.getElementById("secret-btn");
+  const secretForm = document.getElementById("secret-form");
+  document.getElementById("secret-cancel").addEventListener("click", () => secretDialog.close());
+  secretButton.addEventListener("click", () => {
+    document.getElementById("secret-label").value = "";
+    document.getElementById("secret-value").value = "";
+    secretDialog.showModal();
+    document.getElementById("secret-value").focus();
+  });
+  secretForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const label = document.getElementById("secret-label").value.trim();
+    const valueEl = document.getElementById("secret-value");
+    const value = valueEl.value.trim();
+    if (!value) return;
+    const submit = secretForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    try {
+      const res = await fetch("/api/secrets/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "register failed");
+      const start = msgInput.selectionStart;
+      const end = msgInput.selectionEnd;
+      msgInput.setRangeText(data.placeholder, start, end, "end");
+      secretDialog.close();
+      valueEl.value = "";
+      msgInput.focus();
+    } catch (err) {
+      alert(t("secretRegisterError") + ": " + err.message);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
   // ストリーミング中はナビゲーションを防止
   document.querySelectorAll("#top-nav a").forEach(link => {
     link.addEventListener("click", (e) => {
@@ -467,9 +598,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-function send(textOverride) {
+async function send(textOverride) {
   if (typeof textOverride !== "string") textOverride = null;
-  const text = textOverride || (() => {
+  let text = textOverride || (() => {
     const input = document.getElementById("msg-input");
     const t = input.value.trim();
     input.value = "";
@@ -478,6 +609,21 @@ function send(textOverride) {
   })();
   if (!text) return;
 
+  try {
+    const normalizedRes = await fetch("/api/secrets/normalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const normalized = await normalizedRes.json();
+    if (!normalizedRes.ok) throw new Error(normalized.error || "normalize failed");
+    text = normalized.text;
+  } catch (err) {
+    if (!textOverride) document.getElementById("msg-input").value = text;
+    alert(t("secretNormalizeError") + ": " + err.message);
+    return;
+  }
+
   if (!textOverride) {
     addMessage("user", text, false, messageIndex++);
   }
@@ -485,6 +631,7 @@ function send(textOverride) {
   const input = document.getElementById("msg-input");
   input.disabled = true;
   document.getElementById("send-btn").disabled = true;
+  document.getElementById("secret-btn").disabled = true;
   streaming = true;
   showTyping(true);
   document.getElementById("header-status").className = "status-dot streaming";
@@ -508,6 +655,7 @@ function send(textOverride) {
     let currentDiv = addMessage("assistant", "", false, messageIndex++);
     currentAssistantDiv = currentDiv;
     let buffer = "";
+    let assistantText = "";
 
     while (true) {
       const { done, value } = await reader.read();
@@ -519,22 +667,32 @@ function send(textOverride) {
         if (line.startsWith("data: ")) {
           const data = JSON.parse(line.slice(6));
           if (data.type === "chunk") {
-            currentDiv.querySelector(".text").textContent += data.content;
+            assistantText += data.content;
+            renderMessageText(currentDiv.querySelector(".text"), assistantText, true);
             document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
           } else if (data.type === "done") {
-            // nothing more
+            renderMessageText(currentDiv.querySelector(".text"), assistantText, false);
           } else if (data.type === "error") {
             const msg = (data.code && t(data.code)) || data.content || t("err_api_unknown");
-            currentDiv.querySelector(".text").textContent = "\u26a0\ufe0f " + msg;
+            assistantText = "\u26a0\ufe0f " + msg;
+            renderMessageText(currentDiv.querySelector(".text"), assistantText);
           } else if (data.type === "state") {
             updateStatePanel(data.state);
           } else if (data.type === "cancelled") {
-            currentDiv.querySelector(".text").textContent += "\n[中断]";
+            assistantText += "\n[中断]";
+            renderMessageText(currentDiv.querySelector(".text"), assistantText);
           }
         }
       }
     }
   }).catch(err => {
+    if (err.name === "AbortError") {
+      if (currentAssistantDiv) {
+        const textEl = currentAssistantDiv.querySelector(".text");
+        if (textEl && !textEl.textContent.includes("[\u4e2d\u65ad]")) textEl.textContent += "\n[\u4e2d\u65ad]";
+      }
+      return;
+    }
     if (currentAssistantDiv) {
       currentAssistantDiv.querySelector(".text").textContent = "\u26a0\ufe0f 通信エラー: " + err.message;
     } else {
@@ -549,12 +707,17 @@ function send(textOverride) {
     document.getElementById("stop-btn").style.display = "none";
     input.disabled = false;
     document.getElementById("send-btn").disabled = false;
+  document.getElementById("secret-btn").disabled = false;
     input.focus();
   });
 }
 
 async function cancelChat() {
-  if (!abortController) return;
-  abortController.abort();
+  const controller = abortController;
+  if (!controller) return;
   try { await fetch("/api/chat/cancel", { method: "POST" }); } catch (_) {}
+  // Let the server persist the partial turn; abort only if upstream stays silent.
+  setTimeout(() => {
+    if (streaming && abortController === controller) controller.abort();
+  }, 1500);
 }

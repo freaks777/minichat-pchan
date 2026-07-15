@@ -48,6 +48,23 @@ const I18N = {
     btnDelete: "削除",
     btnEdited: "[編集済]",
     btnStop: "停止",
+    secretButtonTitle: "機密値を挿入",
+    secretDialogTitle: "機密値を挿入",
+    secretLabel: "ラベル（任意）",
+    secretValue: "機密値",
+    secretCancel: "キャンセル",
+    secretInsert: "挿入",
+    secretReveal: "一時表示／再マスク",
+    secretUnavailable: "利用不可",
+    secretRegisterError: "機密値を登録できませんでした",
+    secretNormalizeError: "機密情報を安全に処理できませんでした",
+    secretRemovedWarning: "機密情報プレースホルダーが削除または変更されています。保存を続けますか？",
+    studioSecretsTitle: "機密項目",
+    studioSecretsHint: "挿入先の項目を選択してから登録してください。実値は下書きやペルソナファイルに保存されません。",
+    studioSecretAdd: "🔒 機密値を登録・挿入",
+    studioSecretTargetRequired: "先に機密値の挿入先となる入力項目を選択してください",
+    studioSecretUnnamed: "機密情報",
+    studioSecretRemove: "一覧から削除",
 
     /* studio */
     studioTitle: "Persona Studio",
@@ -183,6 +200,23 @@ const I18N = {
     btnDelete: "Delete",
     btnEdited: "[Edited]",
     btnStop: "Stop",
+    secretButtonTitle: "Insert confidential value",
+    secretDialogTitle: "Insert confidential value",
+    secretLabel: "Label (optional)",
+    secretValue: "Confidential value",
+    secretCancel: "Cancel",
+    secretInsert: "Insert",
+    secretReveal: "Reveal temporarily / mask again",
+    secretUnavailable: "Unavailable",
+    secretRegisterError: "Could not register confidential value",
+    secretNormalizeError: "Could not process confidential information safely",
+    secretRemovedWarning: "A confidential placeholder was removed or changed. Continue saving?",
+    studioSecretsTitle: "Confidential fields",
+    studioSecretsHint: "Select a destination field before registering. Actual values are never saved in drafts or persona files.",
+    studioSecretAdd: "🔒 Register and insert",
+    studioSecretTargetRequired: "Select an input field where the confidential placeholder should be inserted",
+    studioSecretUnnamed: "Confidential information",
+    studioSecretRemove: "Remove from list",
 
     studioTitle: "Persona Studio",
     tabTemplate: "Fixed Form",
@@ -302,6 +336,11 @@ function i18nApply() {
   document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
     const key = el.getAttribute("data-i18n-placeholder");
     if (I18N[lang]?.[key]) el.placeholder = I18N[lang][key];
+  });
+
+  document.querySelectorAll("[data-i18n-title]").forEach(el => {
+    const key = el.getAttribute("data-i18n-title");
+    if (I18N[lang]?.[key]) el.title = I18N[lang][key];
   });
 
   // data-i18n-value (for <option>)

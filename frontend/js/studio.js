@@ -2,6 +2,8 @@
 
 let hasDraft = false;
 let _loading = false;
+let studioSecrets = [];
+let lastStudioSecretTarget = null;
 
 // ── デフォルトID ──
 function defaultPersonaId() {
@@ -56,6 +58,94 @@ async function cancelStudioOp() {
 }
 
 
+// ── 機密項目 ──
+
+function studioSecretData() {
+  return studioSecrets.map(item => ({ label: item.label || "", placeholder: item.placeholder }));
+}
+
+function insertStudioPlaceholder(placeholder) {
+  const target = lastStudioSecretTarget;
+  if (!target || !document.contains(target) || !("setRangeText" in target)) {
+    setStatus(t("studioSecretTargetRequired"), true);
+    return false;
+  }
+  const start = target.selectionStart ?? target.value.length;
+  const end = target.selectionEnd ?? start;
+  target.setRangeText(placeholder, start, end, "end");
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+  target.focus();
+  return true;
+}
+
+function renderStudioSecrets() {
+  const list = document.getElementById("studio-secrets-list");
+  if (!list) return;
+  list.textContent = "";
+  studioSecrets.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "studio-secret-row";
+    const label = document.createElement("span");
+    label.className = "studio-secret-label";
+    label.textContent = item.label || t("studioSecretUnnamed");
+    const masked = document.createElement("span");
+    masked.className = "secret-masked";
+    masked.textContent = "●●●●●";
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "btn btn-secondary btn-sm";
+    reveal.textContent = "👁";
+    reveal.addEventListener("click", async () => {
+      if (row.classList.contains("revealed")) {
+        masked.textContent = "●●●●●";
+        row.classList.remove("revealed");
+        return;
+      }
+      const res = await fetch("/api/secrets/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ placeholder: item.placeholder }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        masked.textContent = data.value;
+        row.classList.add("revealed");
+      } else {
+        masked.textContent = t("secretUnavailable");
+      }
+    });
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.className = "btn btn-secondary btn-sm";
+    insert.textContent = t("secretInsert");
+    insert.addEventListener("click", () => insertStudioPlaceholder(item.placeholder));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-secondary btn-sm";
+    remove.textContent = "×";
+    remove.title = t("studioSecretRemove");
+    remove.addEventListener("click", () => {
+      studioSecrets.splice(index, 1);
+      renderStudioSecrets();
+    });
+    row.append(label, masked, reveal, insert, remove);
+    list.appendChild(row);
+  });
+}
+
+function secretsFromText(text) {
+  return [...new Set(String(text || "").match(/\{\{secret:\d+\}\}/g) || [])]
+    .map(placeholder => ({ label: "", placeholder }));
+}
+
+function restoreStudioSecrets(items) {
+  studioSecrets = Array.isArray(items)
+    ? items.filter(item => item && /^\{\{secret:\d+\}\}$/.test(item.placeholder || ""))
+        .map(item => ({ label: String(item.label || ""), placeholder: item.placeholder }))
+    : [];
+  renderStudioSecrets();
+}
+
 // ── ドラフト保存/読込 ──
 
 async function saveFormDraft() {
@@ -82,6 +172,7 @@ async function saveFormDraft() {
     persona_id: personaId,
     fields: {},
     extra_sections: getExtraSections(),
+    secrets: studioSecretData(),
   };
   ALL_T_FIELDS.forEach(id => {
     const el = document.getElementById("t-" + id);
@@ -127,6 +218,7 @@ async function loadFormDraft(personaId) {
       });
     }
     if (d.extra_sections) setExtraSections(d.extra_sections);
+    restoreStudioSecrets(d.secrets || []);
     // 本データの表示状態をクリア（下書きは生成前の状態）
     document.getElementById("result-panel").style.display = "none";
     document.getElementById("action-bar").style.display = "none";
@@ -153,6 +245,7 @@ function resetForm(prefix) {
   if (prefix === "t") {
     document.getElementById("raw-text").value = "";
     setExtraSections([]);
+    restoreStudioSecrets([]);
   }
 }
 
@@ -200,6 +293,7 @@ function resetForm(prefix) {
   if (prefix === "t") {
     document.getElementById("raw-text").value = "";
     setExtraSections([]);
+    restoreStudioSecrets([]);
   }
 }
 
@@ -371,6 +465,7 @@ async function generateFromTemplate() {
         persona_id: personaId,
         fields: readTemplateFields(),
         extra_sections: getExtraSections(),
+    secrets: studioSecretData(),
         style_override: getStyle(),
       }),
     });
@@ -428,6 +523,7 @@ async function saveDraft() {
     soul_md: document.getElementById("result-soul").value,
     skill_md: document.getElementById("result-skill").value,
     extra_sections: getExtraSections(),
+    secrets: studioSecretData(),
     style: getStyle(),
   };
 
@@ -649,6 +745,7 @@ async function loadDraft(personaId) {
 
     fillTemplateForm(d.soul_md || "");
     setExtraSections(d.extra_sections || []);
+    restoreStudioSecrets(d.secrets || secretsFromText((d.soul_md || "") + "\n" + (d.skill_md || "")));
     showResult(d);
     setStatus("読み込み完了: " + personaId);
     showToast("✓ 読み込み: " + personaId);
@@ -698,6 +795,61 @@ document.addEventListener("DOMContentLoaded", () => {
   const defaultId = defaultPersonaId();
   document.getElementById("t-persona-id").value = defaultId;
   document.getElementById("d-persona-id").value = defaultId;
+
+  const secretArea = document.getElementById("studio-secrets-area");
+  const secretDialog = document.getElementById("studio-secret-dialog");
+  const secretForm = document.getElementById("studio-secret-form");
+  document.addEventListener("focusin", (event) => {
+    const target = event.target;
+    if (target.matches("#studio-ui input, #studio-ui textarea")
+        && !target.closest("#studio-secret-dialog")
+        && target.id !== "t-persona-id" && target.id !== "d-persona-id") {
+      lastStudioSecretTarget = target;
+    }
+  });
+  fetch("/api/secrets/status")
+    .then(r => r.json())
+    .then(d => { secretArea.style.display = d.enabled ? "" : "none"; })
+    .catch(() => { secretArea.style.display = "none"; });
+  document.getElementById("studio-secret-add").addEventListener("click", () => {
+    if (!lastStudioSecretTarget) {
+      setStatus(t("studioSecretTargetRequired"), true);
+      return;
+    }
+    document.getElementById("studio-secret-label").value = "";
+    document.getElementById("studio-secret-value").value = "";
+    secretDialog.showModal();
+    document.getElementById("studio-secret-value").focus();
+  });
+  document.getElementById("studio-secret-cancel").addEventListener("click", () => secretDialog.close());
+  secretForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const label = document.getElementById("studio-secret-label").value.trim();
+    const valueEl = document.getElementById("studio-secret-value");
+    const value = valueEl.value.trim();
+    if (!value) return;
+    const submit = secretForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    try {
+      const res = await fetch("/api/secrets/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "register failed");
+      studioSecrets.push({ label: data.label || label, placeholder: data.placeholder });
+      renderStudioSecrets();
+      insertStudioPlaceholder(data.placeholder);
+      secretDialog.close();
+      valueEl.value = "";
+    } catch (err) {
+      setStatus(t("secretRegisterError") + ": " + err.message, true);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  renderStudioSecrets();
 
   // t ↔ d のpersona-id同期（バリデーション付き）
   document.getElementById("t-persona-id").addEventListener("input", () => {

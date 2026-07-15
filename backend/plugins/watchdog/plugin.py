@@ -52,6 +52,12 @@ class WatchdogPlugin(PluginBase):
             (lv.get("after", 300), lv.get("subject", ""), lv.get("body", ""))
             for lv in config.get("levels", [])
         ]
+        if self._enabled:
+            self._ensure_monitor()
+        else:
+            self._running = False
+            if self._task and not self._task.done():
+                self._task.cancel()
 
     def set_escalation_texts(self, levels: list[dict]):
         """RP文脈に合わせて動的生成されたエスカレーション文面を注入する。
@@ -74,23 +80,38 @@ class WatchdogPlugin(PluginBase):
         if not self._enabled:
             logger.info("watchdog: disabled by config — not starting monitor")
             return
+        self._ensure_monitor()
+
+    async def run(self, hook: str, data, ctx):
+        if hook == "on_session_start":
+            self._ensure_monitor()
+            self._reset()
+        elif hook == "on_user_message":
+            self._reset()
+        elif hook == "on_session_end":
+            self._last_activity = 0.0
+            self._current_level = 0
+        return data
+
+    async def shutdown(self):
+        """監視ループを停止し、タスクの終了を待つ。"""
+        await self._stop_monitor()
+
+
+    def _ensure_monitor(self):
+        """Start the monitor exactly once when enabled."""
+        if not self._enabled or (self._task and not self._task.done()):
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
         logger.info(
             "watchdog: started (levels=%d, interval=%ds)",
             len(self._levels), self._check_interval,
         )
-
-    async def run(self, hook: str, data, ctx):
-        if hook in ("on_session_start", "on_user_message"):
-            self._reset()
-        elif hook == "on_session_end":
-            await self._stop_monitor()
-        return data
-
-    async def shutdown(self):
-        """監視ループを停止し、タスクの終了を待つ。"""
-        await self._stop_monitor()
 
     async def _stop_monitor(self):
         """監視タスクをキャンセルし、完了を待機する。"""
@@ -101,6 +122,7 @@ class WatchdogPlugin(PluginBase):
                 await self._task
             except asyncio.CancelledError:
                 pass
+        self._task = None
 
     def _reset(self):
         """最終操作時刻とエスカレーションレベルをリセット。"""

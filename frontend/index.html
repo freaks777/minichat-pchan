@@ -67,7 +67,19 @@
   <div id="typing-indicator">
     <span class="dot"></span><span class="dot"></span><span class="dot"></span>
   </div>
+  <dialog id="secret-dialog">
+    <form id="secret-form" method="dialog">
+      <h3 data-i18n="secretDialogTitle">機密値を挿入</h3>
+      <label><span data-i18n="secretLabel">ラベル（任意）</span><input id="secret-label" maxlength="100" autocomplete="off"></label>
+      <label><span data-i18n="secretValue">機密値</span><textarea id="secret-value" maxlength="10000" required autocomplete="off"></textarea></label>
+      <div class="secret-dialog-actions">
+        <button id="secret-cancel" type="button" data-i18n="secretCancel">キャンセル</button>
+        <button type="submit" data-i18n="secretInsert">挿入</button>
+      </div>
+    </form>
+  </dialog>
   <div id="input-area">
+    <button id="secret-btn" type="button" disabled data-i18n-title="secretButtonTitle" title="機密値を挿入">🔒</button>
     <textarea id="msg-input" rows="1" data-i18n-placeholder="inputPlaceholder" placeholder="メッセージを入力..." autofocus disabled></textarea>
     <button id="send-btn" type="button" disabled data-i18n="sendButton">送信</button>
     <button id="stop-btn" type="button" onclick="cancelChat()" style="display:none" data-i18n="btnStop">停止</button>

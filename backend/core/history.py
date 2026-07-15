@@ -30,6 +30,7 @@ class History:
         self._messages: list[dict] = []
         self._system_messages: list[dict] = []
         self._turn_count = 0
+        self._saved_message_count = 0
         self._session_id: str = ""
         self._session_date: str = ""  # セッション作成日（YYYY-MM-DD）、未設定時は今日
 
@@ -63,8 +64,37 @@ class History:
         self._system_messages = system_messages
 
     def get_context(self) -> list[dict]:
-        """APIに渡すメッセージリスト（システムプロンプト + 会話履歴）を返す。"""
-        return self._system_messages + self._messages
+        """Return a non-destructively trimmed context for the API."""
+        return self._system_messages + self._messages_for_context()
+
+    def _messages_for_context(self) -> list[dict]:
+        """Keep recent complete turns without deleting the full in-memory history."""
+        system_chars = sum(len(m.get("content", "")) for m in self._system_messages)
+        allowed_tokens = max(0, self.max_tokens - int(system_chars * 1.5))
+        kept: list[dict] = []
+        total_tokens = 0
+        i = len(self._messages) - 1
+
+        while i >= 0:
+            if (self._messages[i].get("role") == "assistant" and i > 0
+                    and self._messages[i - 1].get("role") == "user"):
+                group = self._messages[i - 1:i + 1]
+                i -= 2
+            else:
+                group = [self._messages[i]]
+                i -= 1
+
+            group_tokens = sum(
+                int(len(m.get("content", "")) * 1.5) for m in group
+            )
+            if kept and total_tokens + group_tokens > allowed_tokens:
+                break
+            kept = group + kept
+            total_tokens += group_tokens
+            if total_tokens >= allowed_tokens:
+                break
+
+        return kept
 
     def add(self, user_text: str, assistant_text: str):
         """ユーザーとアシスタントのメッセージを1往復追加。
@@ -76,62 +106,55 @@ class History:
         self._messages.append({"role": "assistant", "content": assistant_text})
         self._turn_count += 1
 
-    def save_turn(self):
-        """確定した直近1往復（2メッセージ）をファイル末尾に追記する。
+    def save_turn(self, force: bool = False):
+        """未保存の確定ターンを、設定された間隔でファイル末尾に追記する。
 
-        プレースホルダーが本文で上書きされた後に呼ばれることを想定。
+        force=True は終了・中断・エラー時のフラッシュ用。
         追記専用のため、ディスクI/Oは最小限。
-        不正なペア（user/user 等）を検出した場合は _save_full() にフォールバック。
+        不正なペアを検出した場合は _save_full() にフォールバック。
         """
-        if len(self._messages) < 2:
+        pending = self._messages[self._saved_message_count:]
+        if not pending:
             return
-        last_two = self._messages[-2:]
-        if last_two[0].get("role") != "user" or last_two[1].get("role") != "assistant":
-            # 不正なペア → 全保存で修復
+
+        try:
+            interval = max(1, int(self.save_interval))
+        except (TypeError, ValueError):
+            interval = 1
+        if not force and self._turn_count % interval != 0:
+            return
+
+        valid_pairs = len(pending) % 2 == 0 and all(
+            pending[i].get("role") == "user"
+            and pending[i + 1].get("role") == "assistant"
+            for i in range(0, len(pending), 2)
+        )
+        if not valid_pairs:
             self._save_full()
             return
+
         self.persona_dir.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(m, ensure_ascii=False) for m in last_two]
+        lines = [json.dumps(m, ensure_ascii=False) for m in pending]
         with open(self.today_file, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
+        self._saved_message_count = len(self._messages)
 
     def trim(self):
-        """トークン数が max_tokens を超えていたら古いメッセージを除外する。
-
-        簡易推定: 1文字 ≒ 1.5トークン（日本語のため係数1.5）。英語のみなら1.3。
-        ファイル側は追記専用のため削除しない。読み込み時に trim が適用される。
-        """
-        # システムプロンプトのトークン数
-        system_chars = sum(len(m.get("content", "")) for m in self._system_messages)
-        system_tokens = int(system_chars * 1.5)
-
-        # 許容される会話履歴のトークン数
-        allowed_tokens = self.max_tokens - system_tokens
-        if allowed_tokens <= 0:
-            return
-
-        # 新しい方から数えて、トークン制限に収まるまで保持
-        kept = []
-        total_tokens = 0
-        for msg in reversed(self._messages):
-            msg_tokens = int(len(msg.get("content", "")) * 1.5)
-            if total_tokens + msg_tokens > allowed_tokens:
-                break
-            kept.insert(0, msg)
-            total_tokens += msg_tokens
-
-        self._messages = kept
+        """Destructively trim to the same complete-turn context used by the API."""
+        self._messages = self._messages_for_context()
 
     def reload(self, persona_id: str):
         """ペルソナ切替時に呼ばれる。履歴を空にする（続きからは resume を使う）。"""
         self.persona_id = persona_id
         self._messages = []
         self._turn_count = 0
+        self._saved_message_count = 0
 
     def _load_specific(self, jsonl_path):
         """指定されたJSONLファイルから履歴を読み込む（セッション再開用）。"""
         self._messages = []
         self._turn_count = 0
+        self._saved_message_count = 0
         if not jsonl_path.exists():
             return
         try:
@@ -142,10 +165,12 @@ class History:
                         continue
                     msg = json.loads(line)
                     self._messages.append(msg)
-            self._trim()
             self._turn_count = sum(1 for m in self._messages if m.get("role") == "user")
+            self._saved_message_count = len(self._messages)
         except Exception:
-            pass
+            # Do not disguise a corrupt history as an empty successful load.
+            # Let the caller handle the restoration failure.
+            raise
 
     def update_message(self, index: int, content: str):
         """指定インデックスのメッセージ内容を更新し、JSONLを全書き直し。"""
@@ -165,6 +190,7 @@ class History:
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         os.replace(temp_file, self.today_file)
+        self._saved_message_count = len(self._messages)
 
     def _load_latest(self):
         """最新の履歴ファイルから直近のメッセージを読み込む。"""
@@ -192,3 +218,4 @@ class History:
 
         # トークン制限を適用
         self.trim()
+        self._saved_message_count = len(self._messages)
