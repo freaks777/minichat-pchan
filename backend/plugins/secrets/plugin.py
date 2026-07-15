@@ -19,6 +19,8 @@ from plugins.base import PluginBase
 
 logger = logging.getLogger("rp-standalone")
 
+PRIVATE_FILE_MODE = 0o600
+
 # 入力構文: {{s: label: value}} または {{s: value}}
 SECRET_INPUT_RE = re.compile(r"\{\{s:\s*(?:(\w+):\s*)?(.+?)\}\}")
 
@@ -43,7 +45,40 @@ class SecretsPlugin(PluginBase):
     def configure(self, store_path: str):
         """保存先パスを設定し、既存データを読み込む。"""
         self._store_path = Path(store_path)
+        if self._store_path.exists():
+            self._restrict_permissions(self._store_path)
         self._load()
+
+    @staticmethod
+    def _supports_posix_permissions() -> bool:
+        return os.name != "nt"
+
+    @classmethod
+    def _restrict_permissions(cls, path: Path):
+        """POSIXでは機密ファイルを所有者のみ読み書き可能にする。"""
+        if cls._supports_posix_permissions():
+            os.chmod(path, PRIVATE_FILE_MODE)
+
+    @classmethod
+    def _write_private_text(cls, path: Path, text: str):
+        """POSIXでは作成時点から0600となるようにテキストを書き込む。"""
+        if not cls._supports_posix_permissions():
+            path.write_text(text, encoding="utf-8")
+            return
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, PRIVATE_FILE_MODE)
+        try:
+            # 以前の異常終了で緩い権限の.tmpが残っていても、書込前に補正する。
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                fd = -1
+                file.write(text)
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
     def _load(self):
         if self._store_path and self._store_path.exists():
@@ -61,11 +96,12 @@ class SecretsPlugin(PluginBase):
             self._store_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self._store_path.with_suffix(self._store_path.suffix + ".tmp")
             try:
-                temp_path.write_text(
+                self._write_private_text(
+                    temp_path,
                     json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
                 )
                 os.replace(temp_path, self._store_path)
+                self._restrict_permissions(self._store_path)
             except Exception:
                 temp_path.unlink(missing_ok=True)
                 raise

@@ -1040,3 +1040,13 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `frontend/*.html`, `frontend/css/style.css`, `backend/main.py`, `tests/test_regressions.py`
 
 **確認結果**: 回帰テスト19件成功、JavaScript構文チェック6ファイル成功、HTMLの `style=` 0件、CSP再実測0件、`git diff --check` 問題なし
+
+### 22.12 機密ファイルのPOSIX権限制限（2026-07-16）
+
+- Linux/macOSで `secrets_store.json` と書込用一時ファイルを所有者のみ読み書き可能な `0600` に制限
+- 一時ファイルは `os.open()` で作成時点から `0600` とし、平文が緩い権限で存在する時間窓を回避
+- 既存ストアは読込前に `0600` へ補正し、権限設定失敗時は機密保持を優先して初期化を失敗させる
+- Windowsでは既存のユーザーACLに委ね、POSIX権限操作をスキップ
+- 新規保存、既存移行、エラー伝播、Windows分岐の回帰テストを追加
+
+**変更ファイル**: `backend/plugins/secrets/plugin.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/backlog.md`

@@ -794,7 +794,7 @@ chroma:
    └─→ [画面表示] ... デフォルトはマスク表示、ボタン押下で一時展開
 ```
 
-**実装**: `backend/plugins/secrets/plugin.py` — `SecretsPlugin` クラス。`register()` / `protect_text()` / `reveal()` / `get_entry()` を提供。ストアは `secrets_store.json`（一時ファイル置換でアトミック保存）。
+**実装**: `backend/plugins/secrets/plugin.py` — `SecretsPlugin` クラス。`register()` / `protect_text()` / `reveal()` / `get_entry()` を提供。ストアは `secrets_store.json`（一時ファイル置換でアトミック保存）。Linux/macOSでは一時ファイルを作成時点から `0600` とし、既存ストアも読込前に `0600` へ補正する。権限設定に失敗した場合は機密保持を優先して初期化を失敗させる。WindowsではユーザーACLに委ね、POSIX権限操作は行わない。
 
 **適用範囲**
 

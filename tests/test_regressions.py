@@ -1,9 +1,11 @@
 import asyncio
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +205,62 @@ class SecretsTests(unittest.TestCase):
             saved = json.loads(store.read_text(encoding="utf-8"))
             self.assertEqual(saved["secrets"]["1"]["label"], "workplace")
             self.assertFalse(list(store.parent.glob("*.tmp")))
+
+    @mock.patch("plugins.secrets.plugin.os.chmod")
+    @mock.patch.object(SecretsPlugin, "_supports_posix_permissions", return_value=True)
+    def test_configure_restricts_existing_store_before_load(
+        self, _supports_mock, chmod_mock
+    ):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            store = Path(tmp) / "secrets_store.json"
+            store.write_text('{"secrets": {}, "next_id": 1}', encoding="utf-8")
+            plugin = SecretsPlugin()
+            plugin.configure(str(store))
+            chmod_mock.assert_called_once_with(store, 0o600)
+
+    @mock.patch.object(SecretsPlugin, "_supports_posix_permissions", return_value=True)
+    def test_configure_propagates_permission_failure(self, _supports_mock):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            store = Path(tmp) / "secrets_store.json"
+            store.write_text('{"secrets": {}, "next_id": 1}', encoding="utf-8")
+            plugin = SecretsPlugin()
+            with mock.patch(
+                "plugins.secrets.plugin.os.chmod",
+                side_effect=PermissionError("denied"),
+            ):
+                with self.assertRaises(PermissionError):
+                    plugin.configure(str(store))
+
+    @mock.patch.object(SecretsPlugin, "_supports_posix_permissions", return_value=True)
+    def test_posix_temp_is_created_private(self, _supports_mock):
+        file_handle = mock.MagicMock()
+        context = mock.MagicMock()
+        context.__enter__.return_value = file_handle
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+
+        with (
+            mock.patch("plugins.secrets.plugin.os.open", return_value=42) as open_mock,
+            mock.patch("plugins.secrets.plugin.os.fchmod", create=True) as fchmod_mock,
+            mock.patch("plugins.secrets.plugin.os.fdopen", return_value=context),
+        ):
+            SecretsPlugin._write_private_text(Path("secret.tmp"), "secret")
+
+        open_mock.assert_called_once_with(Path("secret.tmp"), flags, 0o600)
+        fchmod_mock.assert_called_once_with(42, 0o600)
+        file_handle.write.assert_called_once_with("secret")
+
+    @mock.patch("plugins.secrets.plugin.os.chmod")
+    @mock.patch.object(SecretsPlugin, "_supports_posix_permissions", return_value=False)
+    def test_windows_skips_posix_permission_changes(self, _supports_mock, chmod_mock):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            store = Path(tmp) / "secrets_store.json"
+            plugin = SecretsPlugin()
+            plugin.configure(str(store))
+            plugin.register("private-value", "test")
+            chmod_mock.assert_not_called()
+            self.assertTrue(store.exists())
 
     def test_user_message_hook_masks_previously_registered_value(self):
         plugin = SecretsPlugin()
