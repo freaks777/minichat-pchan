@@ -240,6 +240,24 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
             }],
         }
 
+    @staticmethod
+    def form_component(form_id="search-form", action="search", fields=None, disabled=False):
+        return {
+            "type": "form",
+            "id": form_id,
+            "action": action,
+            "submit_label": "Search",
+            "disabled": disabled,
+            "fields": fields or [{
+                "id": "query",
+                "label": "Query",
+                "required": True,
+                "max_length": 200,
+                "placeholder": "Enter query",
+                "value": "",
+            }],
+        }
+
     def manager(self, plugins):
         manager = PluginManager.__new__(PluginManager)
         manager.plugins = sorted(plugins, key=lambda plugin: plugin.priority)
@@ -381,6 +399,135 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         ])
         with self.assertRaises(KeyError):
             await disabled_manager.dispatch_ui_action("disabled", "shared", {})
+
+    def test_accepts_and_normalizes_text_form_definition(self):
+        component = self.form_component()
+        definition = self.definition(components=[component])
+        plugin = self.plugin("demo", definition=definition)
+
+        normalized = PluginManager._validate_ui_definition(plugin, definition)
+
+        self.assertEqual(normalized["components"], [component])
+        boundary_fields = [
+            {
+                "id": f"field-{index}", "label": "Field", "required": False,
+                "max_length": 2000, "placeholder": "x" * 100, "value": "x" * 2000,
+            }
+            for index in range(10)
+        ]
+        boundary = self.definition(components=[
+            self.form_component(fields=boundary_fields)
+        ])
+        self.assertIsNotNone(PluginManager._validate_ui_definition(plugin, boundary))
+
+    def test_rejects_invalid_text_form_definitions(self):
+        plugin = self.plugin("demo", definition=self.definition())
+        valid = self.form_component()
+        field = valid["fields"][0]
+        invalid_components = [
+            {**valid, "html": "<b>x</b>"},
+            {**valid, "id": "bad id"},
+            {**valid, "action": "bad action"},
+            {**valid, "submit_label": ""},
+            {**valid, "disabled": "false"},
+            {**valid, "fields": []},
+            {**valid, "fields": [field] * 11},
+            {**valid, "fields": [field, field]},
+            {**valid, "fields": [{**field, "label": ""}]},
+            {**valid, "fields": [{**field, "required": 1}]},
+            {**valid, "fields": [{**field, "max_length": 0}]},
+            {**valid, "fields": [{**field, "max_length": 2001}]},
+            {**valid, "fields": [{**field, "placeholder": "x" * 101}]},
+            {**valid, "fields": [{**field, "max_length": 3, "value": "long"}]},
+            {**valid, "fields": [{**field, "unknown": True}]},
+        ]
+        for component in invalid_components:
+            with self.subTest(component=component):
+                self.assertIsNone(PluginManager._validate_ui_definition(
+                    plugin, self.definition(components=[component])
+                ))
+
+    def test_rejects_form_action_duplicates_and_button_collisions(self):
+        form = self.form_component(action="submit")
+        duplicate_forms = [
+            self.definition("chat.toolbar", components=[form]),
+            self.definition("settings.plugins", components=[
+                self.form_component("other-form", action="submit")
+            ]),
+        ]
+        collision = [
+            self.definition("chat.toolbar", components=[form]),
+            self.definition("settings.plugins", components=[{
+                "type": "button", "id": "submit-button", "label": "Submit",
+                "action": "submit",
+            }]),
+        ]
+        plugin = self.plugin("demo", definition=duplicate_forms)
+
+        self.assertIsNone(PluginManager._validate_ui_definitions(plugin, duplicate_forms))
+        self.assertIsNone(PluginManager._validate_ui_definitions(plugin, collision))
+
+    async def test_dispatches_valid_form_payload_and_preserves_values(self):
+        form = self.form_component(fields=[
+            {
+                "id": "required", "label": "Required", "required": True,
+                "max_length": 10, "placeholder": "", "value": "",
+            },
+            {
+                "id": "optional", "label": "Optional", "required": False,
+                "max_length": 10, "placeholder": "", "value": "",
+            },
+        ])
+        definition = self.definition(components=[form])
+        manager = self.manager([self.plugin("demo", definition=definition)])
+        payload = {
+            "form_id": "search-form",
+            "values": {"required": "   ", "optional": ""},
+        }
+
+        result = await manager.dispatch_ui_action("demo", "search", payload)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["data"], payload)
+
+    async def test_rejects_invalid_form_payload_before_plugin_handler(self):
+        form = self.form_component()
+        definition = self.definition(components=[form])
+        invalid_payloads = [
+            {"form_id": "search-form", "values": {"query": "ok"}, "extra": True},
+            {"form_id": "wrong", "values": {"query": "ok"}},
+            {"form_id": "search-form", "values": "not an object"},
+            {"form_id": "search-form", "values": {}},
+            {"form_id": "search-form", "values": {"query": "ok", "extra": "x"}},
+            {"form_id": "search-form", "values": {"query": 1}},
+            {"form_id": "search-form", "values": {"query": ""}},
+            {"form_id": "search-form", "values": {"query": "x" * 201}},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                manager = self.manager([
+                    self.plugin("demo", definition=definition, error="action")
+                ])
+                with self.assertRaises(ValueError):
+                    await manager.dispatch_ui_action("demo", "search", payload)
+
+    async def test_disabled_form_and_button_form_routing_are_isolated(self):
+        disabled = self.definition(components=[
+            self.form_component(disabled=True)
+        ])
+        manager = self.manager([self.plugin("demo", definition=disabled)])
+        with self.assertRaises(KeyError):
+            await manager.dispatch_ui_action("demo", "search", {
+                "form_id": "search-form", "values": {"query": "ok"},
+            })
+
+        button_manager = self.manager([
+            self.plugin("button", definition=self.definition())
+        ])
+        result = await button_manager.dispatch_ui_action("button", "run", {})
+        self.assertEqual(result["status"], "ok")
+        with self.assertRaises(KeyError):
+            await manager.dispatch_ui_action("demo", "search", {})
 
     def test_accepts_all_four_ui_slots(self):
         plugin = self.plugin("demo", definition=self.definition())
@@ -683,7 +830,7 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('button.textContent = component.label', script)
         self.assertIn('status.textContent = component.text', script)
         self.assertIn('separator.setAttribute("role", "separator")', script)
-        self.assertIn('payload.version !== 5', script)
+        self.assertIn('payload.version !== 6', script)
         self.assertIn('const groups = new Map()', script)
         self.assertIn('if (!groups.has(pluginName)) groups.set(pluginName, [])', script)
         self.assertIn('function validPluginDefinitions(definitions)', script)
@@ -693,6 +840,14 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('status.textContent = update.text', script)
         self.assertIn('status.classList.remove(...STATUS_CLASSES)', script)
         self.assertIn('button.disabled = component.disabled', script)
+        self.assertIn('function requestAction(pluginName, action, payload)', script)
+        self.assertIn('form.addEventListener("submit"', script)
+        self.assertIn('event.preventDefault()', script)
+        self.assertIn('input.type = "text"', script)
+        self.assertIn('input.autocomplete = "off"', script)
+        self.assertIn('input.value = field.value', script)
+        self.assertIn('form_id: component.id', script)
+        self.assertIn('controls.forEach(control => { control.disabled = true; })', script)
         self.assertIn('button.addEventListener("click"', script)
         self.assertIn("slot.replaceChildren()", script)
         self.assertIn("generation !== initGeneration", script)

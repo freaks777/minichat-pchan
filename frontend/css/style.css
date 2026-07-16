@@ -1263,6 +1263,33 @@ input.invalid {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.plugin-ui-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.plugin-ui-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.plugin-ui-form-field input {
+  min-width: 140px;
+  max-width: 240px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.plugin-ui-form-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .plugin-ui-separator {
   align-self: stretch;
   width: 1px;

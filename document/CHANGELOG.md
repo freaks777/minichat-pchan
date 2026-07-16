@@ -1154,3 +1154,20 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/plugins/base.py`, `backend/plugins/plugin_manager.py`, `backend/main.py`, `frontend/js/plugin-ui.js`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: 回帰テスト50件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし
+
+### 22.21 動的プラグインUI拡張 Phase 5（2026-07-16）
+
+- UIスキーマをversion 6へ更新し、1〜10個の文字列fieldを持つformコンポーネントを追加
+- form/fieldのID、action、label、required、max_length、placeholder、初期valueを型別allowlistで検証
+- form actionのplugin内重複とbutton actionとの衝突を禁止し、不正定義はplugin単位で全拒否
+- form送信payloadを `{form_id, values}` に固定し、全fieldの存在、未知field、文字列型、required、最大長をhandler呼出前に検証
+- `form_id` が存在する場合だけform検証へ分岐し、既存button actionのpayload互換性を維持
+- disabled formはバックエンドでaction非公開、フロントで全controlを操作不能にした
+- フロントのaction通信をbutton/form共通処理へ統合し、DOM APIだけでlabel・text input・submit buttonを構築
+- 送信中のcontrol無効化と復帰、既存feedback・CustomEvent・status動的更新をformでも共通利用
+- passwordやsecrets属性を追加せず、機密値は環境変数・`.env`・secrets専用UIを使う境界を設計書へ明記
+- textarea、select、checkbox、number、secrets連携は後続タスクとして維持
+
+**変更ファイル**: `backend/plugins/plugin_manager.py`, `backend/main.py`, `frontend/js/plugin-ui.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: 回帰テスト56件成功、Plugin UIテスト24件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし

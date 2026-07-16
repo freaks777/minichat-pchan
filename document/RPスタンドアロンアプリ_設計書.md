@@ -471,7 +471,7 @@ class PluginBase(ABC):
         return {"status": "error", "message": "unsupported action", "data": {}}
 ```
 
-**動的プラグインUI基盤**: `get_ui_slot()` はHTML・JavaScript・CSSではなく構造化データだけを返す。スキーマversion 5は操作用の `button` と、表示専用の `separator` / `status` を扱い、配置先は `chat.input_actions`、`chat.toolbar`、`studio.actions`、`settings.plugins` の4スロットに限定する。戻り値は従来互換の単一dict、最大4件のlist、またはUIなしを示すNoneとする。複数定義ではslot重複を禁止し、各定義を最大10コンポーネント、合計最大40コンポーネントに制限する。component IDはstatus更新対象を一意にするため同一プラグインの全スロットで重複を禁止する。`status` の `text` は1〜200文字、`level` は `info` / `success` / `warning` / `error` の4値とする。定義は `PluginManager.collect_ui_definitions()` がプラグインpriority順、同一プラグイン内は宣言順に収集し、プラグイン単位のall-or-nothingで検証する。不正なプラグインは全定義を拒否してログに残し、他プラグインは継続する。
+**動的プラグインUI基盤**: `get_ui_slot()` はHTML・JavaScript・CSSではなく構造化データだけを返す。スキーマversion 6は操作用の `button` / `form` と、表示専用の `separator` / `status` を扱い、配置先は `chat.input_actions`、`chat.toolbar`、`studio.actions`、`settings.plugins` の4スロットに限定する。戻り値は従来互換の単一dict、最大4件のlist、またはUIなしを示すNoneとする。複数定義ではslot重複を禁止し、各定義を最大10コンポーネント、合計最大40コンポーネントに制限する。component IDはstatus更新対象を一意にするため同一プラグインの全スロットで重複を禁止する。`status` の `text` は1〜200文字、`level` は `info` / `success` / `warning` / `error` の4値とする。定義は `PluginManager.collect_ui_definitions()` がプラグインpriority順、同一プラグイン内は宣言順に収集し、プラグイン単位のall-or-nothingで検証する。不正なプラグインは全定義を拒否してログに残し、他プラグインは継続する。
 
 ```python
 {
@@ -494,11 +494,35 @@ class PluginBase(ABC):
 }
 ```
 
+文字列入力formは次の構造とする。
+
+```python
+{
+    "type": "form",
+    "id": "search-form",
+    "action": "search",
+    "submit_label": "検索",
+    "disabled": False,
+    "fields": [{
+        "id": "query",
+        "label": "検索語",
+        "required": True,
+        "max_length": 200,
+        "placeholder": "検索語を入力",
+        "value": "",
+    }],
+}
+```
+
+formは1〜10個の文字列fieldを持つ。field IDはform内で一意、labelは1〜80文字、max_lengthは1〜2000、placeholderは100文字以下、初期valueはmax_length以下とする。form actionは同一plugin内で一意とし、button actionとの衝突を禁止する。form全体のdisabledだけを扱い、field単位disabled、textarea、select、checkbox、number、password、fileはversion 6の対象外とする。
+
+form送信payloadは `{form_id, values}` の2フィールドだけを許可する。コアはform ID、全fieldの存在、未知field、文字列型、requiredの空文字列、max_lengthを定義と照合し、検証済みpayloadだけをplugin handlerへ渡す。不正payloadは422としhandlerを呼ばない。`form_id` が存在する場合だけform検証へ入り、既存button payloadの処理は変更しない。disabled formはactionを公開しない。
+
 APIは `GET /api/plugins/ui` で有効な定義を返し、`POST /api/plugins/{plugin_name}/actions/{action}` で定義済みかつ有効なアクションだけを実行する。POSTは同一オリジン、16KB以下のJSON objectに限定する。 Studio/Settingsではセッション開始前の操作を許容し、`SessionContext.persona_id` は空文字列になり得る。セッション必須条件は各プラグインが検証する。コアは形式・サイズ・公開アクションを検証し、各プラグインは必須キー、値型、範囲、パス等の業務検証を担当する。応答は `{status, message, data}` に固定し、messageは500文字、JSON化したdataは64KBを上限とする。buttonアクションから同一プラグインの公開済みstatusを更新する場合は、`data.ui_updates` に `{component_id, text, level}` の配列を指定する。最大10件、component_idは同一応答内で重複不可とし、対象プラグインのstatus IDだけを許可する。1件でも不正なら更新全体を拒否し、部分適用しない。フロントは対象statusの `textContent` と固定levelクラスだけを変更し、現在の画面に対象要素がなければ安全に無視する。
 
-status更新はアクションレスポンス連動に限定する。ページ再読込時は `get_ui_slot()` の初期値へ戻る。ポーリング、SSE/WebSocket、バックグラウンド処理からの自動更新、状態永続化はversion 5の対象外とする。複数スロットで同じaction名を共有でき、いずれか1つに有効なbuttonがあればaction APIを公開する。すべてdisabledの場合は公開しない。各disabled buttonはフロントのdisabled属性により操作不能とする。
+status更新はアクションレスポンス連動に限定する。ページ再読込時は `get_ui_slot()` の初期値へ戻る。ポーリング、SSE/WebSocket、バックグラウンド処理からの自動更新、状態永続化はversion 6の対象外とする。複数スロットで同じaction名を共有でき、いずれか1つに有効なbuttonがあればaction APIを公開する。すべてdisabledの場合は公開しない。各disabled buttonはフロントのdisabled属性により操作不能とする。
 
-フロントの `plugin-ui.js` は受信定義をplugin名でグループ化し、定義が非連続でもplugin単位の事前検証を完了してから描画する。不正なpluginは部分描画せず、他pluginの描画は継続する。DOM APIと `textContent` だけで各コンポーネントを描画し、buttonの操作には `addEventListener()` を使用する。separator/statusには固定CSSクラスだけを割り当て、プラグイン由来のclassやstyleは受け付けない。チャット、Studio、Settingsの各画面でページ内に存在するスロットだけを描画する。`plugin-ui.js` は各画面で `i18n.js` より後に読み込む。初期化とbutton操作の例外を隔離し、失敗時も各画面の既存JavaScriptへ影響させない。結果は共通フィードバック領域と `plugin-ui-result` CustomEventへ通知する。
+フロントの `plugin-ui.js` は受信定義をplugin名でグループ化し、定義が非連続でもplugin単位の事前検証を完了してから描画する。不正なpluginは部分描画せず、他pluginの描画は継続する。DOM APIと `textContent` だけで各コンポーネントを描画する。formは固定のtext input、label、submit buttonをDOM APIで構築し、`input.value`、maxLength、required、placeholder、`autocomplete="off"` をDOMプロパティへ設定する。送信中はcontrolを一時無効化し、完了後に元の状態へ戻す。button操作とform送信には `addEventListener()` を使用する。separator/statusには固定CSSクラスだけを割り当て、プラグイン由来のclassやstyleは受け付けない。チャット、Studio、Settingsの各画面でページ内に存在するスロットだけを描画する。`plugin-ui.js` は各画面で `i18n.js` より後に読み込む。初期化とbutton操作の例外を隔離し、失敗時も各画面の既存JavaScriptへ影響させない。結果は共通フィードバック領域と `plugin-ui-result` CustomEventへ通知する。form入力値はfeedbackやログへ自動表示しない。version 6のformは機密値入力に使用せず、APIキーやパスワードは環境変数・`.env`・secrets専用UIを使用する。
 
 **プラグインの実行順序**: `priority` の昇順。デフォルトは100。
 

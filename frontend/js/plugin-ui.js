@@ -55,6 +55,35 @@
         && component.label.length <= 80
         && typeof component.disabled === "boolean";
     }
+    if (component.type === "form") {
+      const allowed = ["type", "id", "action", "submit_label", "disabled", "fields"];
+      if (keys.length !== 6 || !keys.every(key => allowed.includes(key))
+          || typeof component.action !== "string" || !NAME_RE.test(component.action)
+          || typeof component.submit_label !== "string"
+          || component.submit_label.length < 1 || component.submit_label.length > 80
+          || typeof component.disabled !== "boolean"
+          || !Array.isArray(component.fields)
+          || component.fields.length < 1 || component.fields.length > 10) return false;
+      const fieldIds = new Set();
+      for (const field of component.fields) {
+        if (!field || typeof field !== "object" || Array.isArray(field)) return false;
+        const fieldKeys = Object.keys(field);
+        if (fieldKeys.length !== 6
+            || !fieldKeys.every(key => [
+              "id", "label", "required", "max_length", "placeholder", "value",
+            ].includes(key))
+            || typeof field.id !== "string" || !NAME_RE.test(field.id)
+            || fieldIds.has(field.id)
+            || typeof field.label !== "string" || field.label.length < 1 || field.label.length > 80
+            || typeof field.required !== "boolean"
+            || !Number.isInteger(field.max_length)
+            || field.max_length < 1 || field.max_length > 2000
+            || typeof field.placeholder !== "string" || field.placeholder.length > 100
+            || typeof field.value !== "string" || field.value.length > field.max_length) return false;
+        fieldIds.add(field.id);
+      }
+      return true;
+    }
     if (component.type === "separator") {
       return keys.length === 2
         && keys.every(key => ["type", "id"].includes(key));
@@ -106,16 +135,14 @@
     return true;
   }
 
-  async function runAction(pluginName, component, button) {
-    const initiallyDisabled = component.disabled;
-    button.disabled = true;
+  async function requestAction(pluginName, action, payload) {
     try {
       const endpoint = "/api/plugins/" + encodeURIComponent(pluginName)
-        + "/actions/" + encodeURIComponent(component.action);
+        + "/actions/" + encodeURIComponent(action);
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({}),
+        body: JSON.stringify(payload),
       });
       const result = await response.json();
       if (!result || typeof result !== "object" || Array.isArray(result)) {
@@ -134,7 +161,7 @@
       }
       showFeedback(message, status === "error");
       document.dispatchEvent(new CustomEvent("plugin-ui-result", {
-        detail: {plugin: pluginName, action: component.action, status, message, data},
+        detail: {plugin: pluginName, action, status, message, data},
       }));
     } catch (error) {
       console.error("plugin UI action failed", error);
@@ -142,6 +169,14 @@
         ? t("pluginActionError")
         : "Plugin action failed";
       showFeedback(fallback, true);
+    }
+  }
+
+  async function runButtonAction(pluginName, component, button) {
+    const initiallyDisabled = component.disabled;
+    button.disabled = true;
+    try {
+      await requestAction(pluginName, component.action, {});
     } finally {
       button.disabled = initiallyDisabled;
     }
@@ -166,6 +201,8 @@
     }
     const slots = new Set();
     const componentIds = new Set();
+    const buttonActions = new Set();
+    const formActions = new Set();
     let componentCount = 0;
     for (const definition of definitions) {
       if (!validDefinition(definition) || slots.has(definition.slot)) return false;
@@ -173,9 +210,17 @@
       for (const component of definition.components) {
         if (componentIds.has(component.id)) return false;
         componentIds.add(component.id);
+        if (component.type === "button") buttonActions.add(component.action);
+        if (component.type === "form") {
+          if (formActions.has(component.action)) return false;
+          formActions.add(component.action);
+        }
         componentCount += 1;
         if (componentCount > 40) return false;
       }
+    }
+    for (const action of formActions) {
+      if (buttonActions.has(action)) return false;
     }
     return true;
   }
@@ -215,6 +260,59 @@
       ids.add(component.id);
     }
     for (const component of components) {
+      if (component.type === "form") {
+        const form = document.createElement("form");
+        form.className = "plugin-ui-form";
+        form.dataset.plugin = pluginName;
+        form.dataset.componentId = component.id;
+        form.dataset.action = component.action;
+        const inputs = [];
+        for (const field of component.fields) {
+          const label = document.createElement("label");
+          label.className = "plugin-ui-form-field";
+          const labelText = document.createElement("span");
+          labelText.textContent = field.label;
+          const input = document.createElement("input");
+          input.type = "text";
+          input.name = field.id;
+          input.value = field.value;
+          input.placeholder = field.placeholder;
+          input.required = field.required;
+          input.maxLength = field.max_length;
+          input.autocomplete = "off";
+          input.disabled = component.disabled;
+          label.append(labelText, input);
+          form.append(label);
+          inputs.push(input);
+        }
+        const submit = document.createElement("button");
+        submit.type = "submit";
+        submit.className = "plugin-ui-button";
+        submit.textContent = component.submit_label;
+        submit.disabled = component.disabled;
+        form.append(submit);
+        form.addEventListener("submit", async event => {
+          event.preventDefault();
+          if (component.disabled) return;
+          const values = {};
+          for (const input of inputs) values[input.name] = input.value;
+          const controls = [...inputs, submit];
+          const disabledStates = controls.map(control => control.disabled);
+          controls.forEach(control => { control.disabled = true; });
+          try {
+            await requestAction(pluginName, component.action, {
+              form_id: component.id,
+              values,
+            });
+          } finally {
+            controls.forEach((control, index) => {
+              control.disabled = disabledStates[index];
+            });
+          }
+        });
+        slot.append(form);
+        continue;
+      }
       if (component.type === "separator") {
         const separator = document.createElement("span");
         separator.className = "plugin-ui-separator";
@@ -242,7 +340,7 @@
       button.dataset.action = component.action;
       button.disabled = component.disabled;
       button.addEventListener("click", () => {
-        runAction(pluginName, component, button);
+        runButtonAction(pluginName, component, button);
       });
       slot.append(button);
     }
@@ -255,7 +353,7 @@
       if (!response.ok) throw new Error("plugin UI HTTP " + response.status);
       const payload = await response.json();
       if (generation !== initGeneration) return;
-      if (!payload || payload.version !== 5 || !Array.isArray(payload.plugins)) {
+      if (!payload || payload.version !== 6 || !Array.isArray(payload.plugins)) {
         throw new Error("invalid plugin UI payload");
       }
       for (const definition of collectValidDefinitions(payload.plugins)) {

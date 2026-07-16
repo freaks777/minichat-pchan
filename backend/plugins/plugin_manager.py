@@ -24,6 +24,8 @@ UI_SEPARATOR_FIELDS = {"type", "id"}
 UI_STATUS_FIELDS = {"type", "id", "text", "level"}
 UI_STATUS_LEVELS = {"info", "success", "warning", "error"}
 UI_UPDATE_FIELDS = {"component_id", "text", "level"}
+UI_FORM_FIELDS = {"type", "id", "action", "submit_label", "disabled", "fields"}
+UI_TEXT_FIELD_FIELDS = {"id", "label", "required", "max_length", "placeholder", "value"}
 
 
 class PluginManager:
@@ -184,6 +186,76 @@ class PluginManager:
                     "action": action,
                     "disabled": disabled,
                 })
+            elif component_type == "form":
+                if not {"type", "id", "action", "submit_label", "fields"}.issubset(component):
+                    return None
+                if not set(component).issubset(UI_FORM_FIELDS):
+                    return None
+                action = component.get("action")
+                submit_label = component.get("submit_label")
+                disabled = component.get("disabled", False)
+                fields = component.get("fields")
+                if isinstance(submit_label, str):
+                    submit_label = submit_label.strip()
+                if (
+                    not isinstance(action, str)
+                    or not UI_NAME_RE.fullmatch(action)
+                    or not isinstance(submit_label, str)
+                    or not 1 <= len(submit_label) <= 80
+                    or not isinstance(disabled, bool)
+                    or not isinstance(fields, list)
+                    or not 1 <= len(fields) <= 10
+                ):
+                    return None
+                normalized_fields = []
+                field_ids = set()
+                for field in fields:
+                    if not isinstance(field, dict):
+                        return None
+                    if not {"id", "label", "required", "max_length"}.issubset(field):
+                        return None
+                    if not set(field).issubset(UI_TEXT_FIELD_FIELDS):
+                        return None
+                    field_id = field.get("id")
+                    label = field.get("label")
+                    required = field.get("required")
+                    max_length = field.get("max_length")
+                    placeholder = field.get("placeholder", "")
+                    value = field.get("value", "")
+                    if isinstance(label, str):
+                        label = label.strip()
+                    if (
+                        not isinstance(field_id, str)
+                        or not UI_NAME_RE.fullmatch(field_id)
+                        or field_id in field_ids
+                        or not isinstance(label, str)
+                        or not 1 <= len(label) <= 80
+                        or not isinstance(required, bool)
+                        or type(max_length) is not int
+                        or not 1 <= max_length <= 2000
+                        or not isinstance(placeholder, str)
+                        or len(placeholder) > 100
+                        or not isinstance(value, str)
+                        or len(value) > max_length
+                    ):
+                        return None
+                    field_ids.add(field_id)
+                    normalized_fields.append({
+                        "id": field_id,
+                        "label": label,
+                        "required": required,
+                        "max_length": max_length,
+                        "placeholder": placeholder,
+                        "value": value,
+                    })
+                normalized.append({
+                    "type": "form",
+                    "id": component_id,
+                    "action": action,
+                    "submit_label": submit_label,
+                    "disabled": disabled,
+                    "fields": normalized_fields,
+                })
             elif component_type == "separator":
                 if set(component) != UI_SEPARATOR_FIELDS:
                     return None
@@ -228,6 +300,8 @@ class PluginManager:
         normalized = []
         slots = set()
         component_ids = set()
+        button_actions = set()
+        form_actions = set()
         component_count = 0
         for raw_definition in raw_definitions:
             definition = cls._validate_ui_definition(plugin, raw_definition)
@@ -239,10 +313,18 @@ class PluginManager:
                 if component_id in component_ids:
                     return None
                 component_ids.add(component_id)
+                if component["type"] == "button":
+                    button_actions.add(component["action"])
+                elif component["type"] == "form":
+                    if component["action"] in form_actions:
+                        return None
+                    form_actions.add(component["action"])
                 component_count += 1
                 if component_count > 40:
                     return None
             normalized.append(definition)
+        if button_actions & form_actions:
+            return None
         return normalized
 
     def collect_ui_definitions(self) -> list[dict]:
@@ -302,6 +384,32 @@ class PluginManager:
         normalized_data["ui_updates"] = normalized_updates
         return normalized_data
 
+    @staticmethod
+    def _normalize_ui_form_payload(form: dict, payload: dict) -> dict | None:
+        """Validate a submitted form payload against its published field schema."""
+        if set(payload) != {"form_id", "values"}:
+            return None
+        if payload.get("form_id") != form["id"]:
+            return None
+        values = payload.get("values")
+        if not isinstance(values, dict):
+            return None
+        fields = form["fields"]
+        field_ids = {field["id"] for field in fields}
+        if set(values) != field_ids:
+            return None
+        normalized_values = {}
+        for field in fields:
+            value = values.get(field["id"])
+            if (
+                not isinstance(value, str)
+                or len(value) > field["max_length"]
+                or (field["required"] and value == "")
+            ):
+                return None
+            normalized_values[field["id"]] = value
+        return {"form_id": form["id"], "values": normalized_values}
+
     async def dispatch_ui_action(
         self,
         plugin_name: str,
@@ -321,13 +429,26 @@ class PluginManager:
             item for item in self.collect_ui_definitions()
             if item["name"] == plugin_name
         ]
-        allowed = {
+        button_actions = {
             component["action"]
             for definition in definitions
             for component in definition["components"]
             if component["type"] == "button" and not component["disabled"]
         }
-        if action not in allowed:
+        forms_by_action = {
+            component["action"]: component
+            for definition in definitions
+            for component in definition["components"]
+            if component["type"] == "form" and not component["disabled"]
+        }
+        if "form_id" in payload:
+            form = forms_by_action.get(action)
+            if form is None:
+                raise KeyError("plugin action not found")
+            payload = self._normalize_ui_form_payload(form, payload)
+            if payload is None:
+                raise ValueError("invalid form payload")
+        elif action not in button_actions:
             raise KeyError("plugin action not found")
         status_ids = {
             component["id"]
