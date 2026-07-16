@@ -416,6 +416,107 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
                     },
                 )
 
+    async def test_accepts_normalized_status_updates_and_preserves_other_data(self):
+        definition = self.definition(components=[
+            {"type": "status", "id": "state", "text": "Ready", "level": "info"},
+            {"type": "status", "id": "detail", "text": "Idle", "level": "info"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+        updates = [
+            {"component_id": "state", "text": " Connected ", "level": "success"},
+            {"component_id": "detail", "text": "Working", "level": "warning"},
+        ]
+        result = {"status": "ok", "message": "updated", "data": {
+            "value": 1, "ui_updates": updates,
+        }}
+        manager = self.manager([self.plugin("demo", definition=definition, result=result)])
+
+        actual = await manager.dispatch_ui_action("demo", "run", {})
+
+        self.assertEqual(actual["data"]["value"], 1)
+        self.assertEqual(actual["data"]["ui_updates"], [
+            {"component_id": "state", "text": "Connected", "level": "success"},
+            {"component_id": "detail", "text": "Working", "level": "warning"},
+        ])
+
+    async def test_accepts_omitted_empty_and_boundary_status_updates(self):
+        definition = self.definition(components=[
+            {"type": "status", "id": "state", "text": "Ready", "level": "info"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+        cases = [
+            {"value": 1},
+            {"ui_updates": []},
+            {"ui_updates": [{
+                "component_id": "state", "text": "x" * 200, "level": "error",
+            }]},
+        ]
+        for data in cases:
+            with self.subTest(data=data):
+                result = {"status": "ok", "message": "done", "data": data}
+                manager = self.manager([
+                    self.plugin("demo", definition=definition, result=result)
+                ])
+                actual = await manager.dispatch_ui_action("demo", "run", {})
+                self.assertEqual(actual["status"], "ok")
+
+    async def test_rejects_invalid_status_updates_all_or_nothing(self):
+        definition = self.definition(components=[
+            {"type": "separator", "id": "split"},
+            {"type": "status", "id": "state", "text": "Ready", "level": "info"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+        valid = {"component_id": "state", "text": "Updated", "level": "success"}
+        invalid_updates = [
+            "not a list",
+            [valid] * 11,
+            [{**valid, "html": "<b>x</b>"}],
+            [{**valid, "component_id": "bad id"}],
+            [{**valid, "component_id": "missing"}],
+            [{**valid, "component_id": "run"}],
+            [{**valid, "component_id": "split"}],
+            [{**valid, "text": ""}],
+            [{**valid, "text": "x" * 201}],
+            [{**valid, "level": "debug"}],
+            [valid, valid],
+            [valid, {**valid, "component_id": "missing"}],
+        ]
+        invalid_response = {
+            "status": "error", "message": "invalid plugin response", "data": {},
+        }
+        for updates in invalid_updates:
+            with self.subTest(updates=updates):
+                result = {"status": "ok", "message": "done", "data": {
+                    "keep": True, "ui_updates": updates,
+                }}
+                manager = self.manager([
+                    self.plugin("demo", definition=definition, result=result)
+                ])
+                actual = await manager.dispatch_ui_action("demo", "run", {})
+                self.assertEqual(actual, invalid_response)
+
+    async def test_cannot_update_another_plugins_status(self):
+        demo_definition = self.definition(components=[
+            {"type": "status", "id": "own", "text": "Ready", "level": "info"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+        other_definition = self.definition(components=[
+            {"type": "status", "id": "other", "text": "Ready", "level": "info"},
+        ])
+        result = {"status": "ok", "message": "done", "data": {"ui_updates": [{
+            "component_id": "other", "text": "Changed", "level": "error",
+        }]}}
+        manager = self.manager([
+            self.plugin("demo", definition=demo_definition, result=result),
+            self.plugin("other", definition=other_definition),
+        ])
+
+        actual = await manager.dispatch_ui_action("demo", "run", {})
+
+        self.assertEqual(actual, {
+            "status": "error", "message": "invalid plugin response", "data": {},
+        })
+
     async def test_default_action_handler_preserves_existing_plugin_compatibility(self):
         class ExistingPlugin(PluginBase):
             name = "existing"
@@ -462,7 +563,11 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('button.textContent = component.label', script)
         self.assertIn('status.textContent = component.text', script)
         self.assertIn('separator.setAttribute("role", "separator")', script)
-        self.assertIn('payload.version !== 3', script)
+        self.assertIn('payload.version !== 4', script)
+        self.assertIn('function normalizeUiUpdates(updates)', script)
+        self.assertIn('function applyUiUpdates(pluginName, updates)', script)
+        self.assertIn('status.textContent = update.text', script)
+        self.assertIn('status.classList.remove(...STATUS_CLASSES)', script)
         self.assertIn('button.addEventListener("click"', script)
         self.assertIn("slot.replaceChildren()", script)
         self.assertIn("generation !== initGeneration", script)

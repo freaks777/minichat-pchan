@@ -37,6 +37,9 @@
   }
 
   const STATUS_LEVELS = Object.freeze(["info", "success", "warning", "error"]);
+  const STATUS_CLASSES = Object.freeze(
+    STATUS_LEVELS.map(level => "plugin-ui-status-" + level)
+  );
 
   function validComponent(component) {
     if (!component || typeof component !== "object" || Array.isArray(component)) return false;
@@ -66,6 +69,43 @@
     }
     return false;
   }
+
+  function normalizeUiUpdates(updates) {
+    if (!Array.isArray(updates) || updates.length > 10) return null;
+    const normalized = [];
+    const ids = new Set();
+    for (const update of updates) {
+      if (!update || typeof update !== "object" || Array.isArray(update)) return null;
+      const keys = Object.keys(update);
+      if (keys.length !== 3
+          || !keys.every(key => ["component_id", "text", "level"].includes(key))) return null;
+      const componentId = update.component_id;
+      const text = typeof update.text === "string" ? update.text.trim() : "";
+      if (typeof componentId !== "string" || !NAME_RE.test(componentId) || ids.has(componentId)
+          || text.length < 1 || text.length > 200 || !STATUS_LEVELS.includes(update.level)) return null;
+      ids.add(componentId);
+      normalized.push({componentId, text, level: update.level});
+    }
+    return normalized;
+  }
+
+  function applyUiUpdates(pluginName, updates) {
+    const normalized = normalizeUiUpdates(updates);
+    if (normalized === null) return false;
+    const statuses = Array.from(document.querySelectorAll(".plugin-ui-status"));
+    for (const update of normalized) {
+      const status = statuses.find(element =>
+        element.dataset.plugin === pluginName
+        && element.dataset.componentId === update.componentId
+      );
+      if (!status) continue;
+      status.textContent = update.text;
+      status.classList.remove(...STATUS_CLASSES);
+      status.classList.add("plugin-ui-status-" + update.level);
+    }
+    return true;
+  }
+
   async function runAction(pluginName, component, button) {
     const initiallyDisabled = component.disabled;
     button.disabled = true;
@@ -88,6 +128,9 @@
         : {};
       if (!response.ok || !["ok", "error"].includes(status)) {
         throw new Error(message || "plugin action failed");
+      }
+      if (Object.hasOwn(data, "ui_updates") && !applyUiUpdates(pluginName, data.ui_updates)) {
+        throw new Error("invalid plugin UI updates");
       }
       showFeedback(message, status === "error");
       document.dispatchEvent(new CustomEvent("plugin-ui-result", {
@@ -161,7 +204,7 @@
       if (!response.ok) throw new Error("plugin UI HTTP " + response.status);
       const payload = await response.json();
       if (generation !== initGeneration) return;
-      if (!payload || payload.version !== 3 || !Array.isArray(payload.plugins)) {
+      if (!payload || payload.version !== 4 || !Array.isArray(payload.plugins)) {
         throw new Error("invalid plugin UI payload");
       }
       for (const definition of payload.plugins) {

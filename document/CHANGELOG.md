@@ -1125,3 +1125,17 @@ DOM挿入監査で確認したF1〜F3を修正。
 
 **変更ファイル**: `requirements.txt`, `README.md`, `backend/main.py`, `backend/plugins/mail/plugin.py`, `backend/plugins/watchdog/plugin.py`, `backend/plugins/persona_studio/plugin.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 **確認結果**: クリーンvenvと既存環境の `pip check` 成功、4パッケージimport成功、埋め込み初期化成功、回帰テスト42件成功、通常起動で主要3画面とプラグインUI APIが200、UnicodeEncodeError 0件、正常shutdown完了、8765番ポート解放、`git diff --check` 問題なし
+
+### 22.19 動的プラグインUI拡張 Phase 3（2026-07-16）
+
+- UIスキーマをversion 4へ更新し、buttonアクション応答の `data.ui_updates` から同一プラグインのstatusを動的更新可能にした
+- 更新指定を最大10件、`component_id` / `text` / `level` の3フィールドだけに限定し、公開済みstatus ID、重複、文字数、levelをバックエンドでallowlist検証
+- 1件でも不正な場合は更新全体を拒否し、button/separator、存在しないID、他プラグインのstatusへの更新を禁止
+- フロントでも独立して同じ形式を検証し、`textContent` と固定levelクラスだけをall-or-nothingで更新
+- 現在の画面に対象statusが存在しない場合は安全に無視し、既存アクションを失敗させない
+- 更新方式はアクションレスポンス連動だけに限定し、ポーリング、SSE/WebSocket、状態永続化は対象外
+- 入力フォームと複数スロット定義は後続タスクとして維持し、プラグイン開発ガイド整備をbacklogへ追加
+
+**変更ファイル**: `backend/plugins/plugin_manager.py`, `backend/main.py`, `frontend/js/plugin-ui.js`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: 回帰テスト46件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし

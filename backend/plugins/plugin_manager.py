@@ -23,6 +23,7 @@ UI_BUTTON_FIELDS = {"type", "id", "label", "action", "disabled"}
 UI_SEPARATOR_FIELDS = {"type", "id"}
 UI_STATUS_FIELDS = {"type", "id", "text", "level"}
 UI_STATUS_LEVELS = {"info", "success", "warning", "error"}
+UI_UPDATE_FIELDS = {"component_id", "text", "level"}
 
 
 class PluginManager:
@@ -231,6 +232,46 @@ class PluginManager:
                 logger.exception("plugin UI definition failed: %s", plugin.name)
         return definitions
 
+    @staticmethod
+    def _normalize_ui_updates(data: dict, status_ids: set[str]) -> dict | None:
+        """Validate optional action-driven status updates without partial acceptance."""
+        if "ui_updates" not in data:
+            return data
+        updates = data.get("ui_updates")
+        if not isinstance(updates, list) or len(updates) > 10:
+            return None
+
+        normalized_updates = []
+        seen_ids = set()
+        for update in updates:
+            if not isinstance(update, dict) or set(update) != UI_UPDATE_FIELDS:
+                return None
+            component_id = update.get("component_id")
+            text = update.get("text")
+            level = update.get("level")
+            if isinstance(text, str):
+                text = text.strip()
+            if (
+                not isinstance(component_id, str)
+                or not UI_NAME_RE.fullmatch(component_id)
+                or component_id in seen_ids
+                or component_id not in status_ids
+                or not isinstance(text, str)
+                or not 1 <= len(text) <= 200
+                or level not in UI_STATUS_LEVELS
+            ):
+                return None
+            seen_ids.add(component_id)
+            normalized_updates.append({
+                "component_id": component_id,
+                "text": text,
+                "level": level,
+            })
+
+        normalized_data = dict(data)
+        normalized_data["ui_updates"] = normalized_updates
+        return normalized_data
+
     async def dispatch_ui_action(
         self,
         plugin_name: str,
@@ -258,6 +299,11 @@ class PluginManager:
         } if definition else set()
         if action not in allowed:
             raise KeyError("plugin action not found")
+        status_ids = {
+            component["id"]
+            for component in definition["components"]
+            if component["type"] == "status"
+        } if definition else set()
 
         plugin = self.get(plugin_name)
         if plugin is None:
@@ -279,6 +325,9 @@ class PluginManager:
             or len(message) > 500
             or not isinstance(data, dict)
         ):
+            return {"status": "error", "message": "invalid plugin response", "data": {}}
+        data = self._normalize_ui_updates(data, status_ids)
+        if data is None:
             return {"status": "error", "message": "invalid plugin response", "data": {}}
         try:
             serialized_data = json.dumps(data, ensure_ascii=False, allow_nan=False)
