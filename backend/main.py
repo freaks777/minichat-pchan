@@ -1547,59 +1547,132 @@ async def memory_orphans():
         return JSONResponse(status_code=500, content={"error": "memory_orphans_failed"})
 
 
+def _delete_file_resource(path: Path) -> dict:
+    """Delete one file idempotently and return a stable resource result."""
+    try:
+        if not path.exists():
+            return {"status": "not_found", "count": 0}
+        path.unlink()
+        return {"status": "deleted", "count": 1}
+    except Exception:
+        logger.exception("resource delete failed: %s", path.name)
+        return {"status": "error", "count": 0, "error": "delete_failed"}
+
+
 @app.delete("/api/sessions/{persona_id}/{date}")
 async def delete_session(persona_id: str, date: str):
-    """Delete a session and every sidecar that can make it reappear."""
+    """Delete a session across files, logs, Memory, and active runtime state."""
     validate_persona_id(persona_id)
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", date):
         return {"error": "invalid format (use YYYY-MM-DD_HHMMSSRR)"}
 
-    session_date, session_id = date.split("_", 1)
-    persona_dir = BASE_DIR.parent / "sessions" / persona_id
-    file_path = persona_dir / f"{date}.jsonl"
-    meta_path = _session_meta_path(persona_id, session_date, session_id)
-    state_path = _state_path_for(persona_id, session_id)
-    state_history_path = _state_history_path_for(persona_id, session_id)
-    current_path = BASE_DIR / ".current-session"
-    is_current = False
+    async with _api_lock:
+        session_date, session_id = date.split("_", 1)
+        persona_dir = BASE_DIR.parent / "sessions" / persona_id
+        current_path = BASE_DIR / ".current-session"
+        results = {
+            "history": _delete_file_resource(persona_dir / f"{date}.jsonl"),
+            "meta": _delete_file_resource(
+                _session_meta_path(persona_id, session_date, session_id)
+            ),
+            "state": _delete_file_resource(_state_path_for(persona_id, session_id)),
+            "state_history": _delete_file_resource(
+                _state_history_path_for(persona_id, session_id)
+            ),
+            "session_log": _delete_file_resource(
+                BASE_DIR.parent / "session-log" / persona_id / f"{date}.md"
+            ),
+        }
 
-    if current_path.exists():
-        try:
-            current = json.loads(current_path.read_text(encoding="utf-8"))
-            current_date = current.get("session_date", time.strftime("%Y-%m-%d"))
-            is_current = (
-                current.get("persona_id") == persona_id
-                and current.get("session_id") == session_id
-                and current_date == session_date
-            )
-        except Exception:
-            logger.exception("current session read failed during delete")
+        is_current = False
+        if current_path.exists():
+            try:
+                current = json.loads(current_path.read_text(encoding="utf-8"))
+                current_date = current.get("session_date", time.strftime("%Y-%m-%d"))
+                is_current = (
+                    current.get("persona_id") == persona_id
+                    and current.get("session_id") == session_id
+                    and current_date == session_date
+                )
+                results["current_session"] = (
+                    _delete_file_resource(current_path)
+                    if is_current else {"status": "not_target", "count": 0}
+                )
+            except Exception:
+                logger.exception("current session read failed during delete")
+                results["current_session"] = {
+                    "status": "error", "count": 0, "error": "read_failed"
+                }
+        else:
+            results["current_session"] = {"status": "not_found", "count": 0}
 
-    try:
-        existed = file_path.exists()
-        file_path.unlink(missing_ok=True)
-        meta_path.unlink(missing_ok=True)
-        state_path.unlink(missing_ok=True)
-        state_history_path.unlink(missing_ok=True)
-        if is_current:
-            current_path.unlink(missing_ok=True)
+        memory_plugin = _memory_management_plugin()
+        if not plugin_manager.has("memory"):
+            results["memory"] = {"status": "disabled", "count": 0}
+        elif memory_plugin is None:
+            results["memory"] = {
+                "status": "error", "count": 0, "error": "memory_unavailable"
+            }
+        else:
+            try:
+                deleted = await memory_plugin.delete_session(persona_id, session_id)
+                results["memory"] = {
+                    "status": "deleted" if deleted else "not_found",
+                    "count": deleted,
+                }
+            except Exception:
+                logger.exception("memory delete failed for %s/%s", persona_id, session_id)
+                results["memory"] = {
+                    "status": "error", "count": 0, "error": "delete_failed"
+                }
+
+        runtime_matches = (
+            persona_manager.active == persona_id
+            and history.session_id == session_id
+            and getattr(history, "_session_date", "") == session_date
+        )
+        if is_current or runtime_matches:
             history._messages = []
             history._turn_count = 0
             history._saved_message_count = 0
             history._session_id = ""
             history._session_date = ""
-            logger.info("current session cleared: %s/%s", persona_id, date)
+            _state_tracking.reset()
+            results["runtime"] = {"status": "cleared", "count": 0}
+        else:
+            results["runtime"] = {"status": "not_target", "count": 0}
 
-        logger.info("session deleted: %s/%s", persona_id, date)
-        if persona_dir.exists() and not any(persona_dir.iterdir()):
-            persona_dir.rmdir()
-        result = {"status": "ok", "persona_id": persona_id, "date": date}
-        if not existed:
-            result["note"] = "no file found"
-        return result
-    except Exception as e:
-        logger.error("session delete failed: %s", e)
-        return {"error": str(e)}
+        for parent in (
+            persona_dir,
+            BASE_DIR.parent / "session-log" / persona_id,
+        ):
+            try:
+                if parent.exists() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except Exception:
+                logger.exception("empty directory cleanup failed: %s", parent.name)
+
+        errors = [
+            name for name, result in results.items()
+            if result.get("status") == "error"
+        ]
+        deleted_count = sum(int(result.get("count", 0)) for result in results.values())
+        status = "ok" if not errors else ("partial" if deleted_count else "error")
+        response = {
+            "status": status,
+            "persona_id": persona_id,
+            "date": date,
+            "deleted_count": deleted_count,
+            "results": results,
+        }
+        if errors:
+            response["retry"] = True
+            response["failed_resources"] = errors
+        logger.info(
+            "session delete result: %s/%s status=%s deleted=%d",
+            persona_id, date, status, deleted_count,
+        )
+        return response
 
 @app.post("/api/persona/switch")
 async def switch_persona(req: SwitchPersonaRequest):

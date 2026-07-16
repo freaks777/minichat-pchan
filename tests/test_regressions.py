@@ -1692,6 +1692,56 @@ class SessionListContractTests(unittest.TestCase):
         )
 
 
+class SessionDeleteLifecycleTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        node = next(
+            item for item in tree.body
+            if isinstance(item, ast.FunctionDef) and item.name == "_delete_file_resource"
+        )
+        namespace = {"Path": Path, "logger": mock.MagicMock()}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "delete_resource", "exec"), namespace)
+        cls.delete_file_resource = staticmethod(namespace["_delete_file_resource"])
+        cls.source = source
+
+    def test_file_resource_delete_is_idempotent(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text("test", encoding="utf-8")
+
+            self.assertEqual(
+                self.delete_file_resource(path),
+                {"status": "deleted", "count": 1},
+            )
+            self.assertEqual(
+                self.delete_file_resource(path),
+                {"status": "not_found", "count": 0},
+            )
+
+    def test_session_delete_covers_all_resources_and_partial_retry(self):
+        for token in (
+            "async with _api_lock:",
+            '"history": _delete_file_resource',
+            '"meta": _delete_file_resource',
+            '"state": _delete_file_resource',
+            '"state_history": _delete_file_resource',
+            '"session_log": _delete_file_resource',
+            'memory_plugin.delete_session(persona_id, session_id)',
+            '"current_session"',
+            '"runtime"',
+            '"deleted_count": deleted_count',
+            'response["retry"] = True',
+        ):
+            self.assertIn(token, self.source)
+
+        frontend = (ROOT / "frontend" / "js" / "sessions.js").read_text(encoding="utf-8")
+        self.assertIn("data.status === 'partial'", frontend)
+        self.assertIn("data.failed_resources", frontend)
+        self.assertIn("await loadSessions();", frontend)
+
+
 class StateHistoryContractTests(unittest.TestCase):
     def test_state_snapshots_follow_history_edits(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
@@ -1699,7 +1749,7 @@ class StateHistoryContractTests(unittest.TestCase):
         self.assertIn('def _record_state_snapshot(state: dict)', source)
         self.assertIn('if count == 0 or count % 2: return', source)
         self.assertIn('if item["message_count"] <= message_count', source)
-        self.assertIn('state_history_path.unlink(missing_ok=True)', source)
+        self.assertIn('"state_history": _delete_file_resource', source)
         self.assertIn('state = _restore_state_for_history(len(history._messages))', source)
 
     def test_chat_refreshes_state_after_history_changes(self):

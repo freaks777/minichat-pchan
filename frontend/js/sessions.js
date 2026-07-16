@@ -161,7 +161,17 @@ async function deleteSession(sessionId) {
     const res = await fetch(`/api/sessions/${encodeURIComponent(personaId)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    loadSessions();
+    if (data.status === 'partial' || data.status === 'error') {
+      const failed = Array.isArray(data.failed_resources)
+        ? data.failed_resources.join(', ')
+        : 'unknown';
+      throw new Error('一部の削除に失敗しました (' + failed + ')。再試行してください。');
+    }
+    const deletedCount = Number(data.deleted_count || 0);
+    if (deletedCount > 0) {
+      console.info('session delete: ' + deletedCount + ' resource(s) deleted');
+    }
+    await loadSessions();
   } catch (err) {
     console.error('deleteSession failed:', err);
     alert(t('deleteFailed') + ': ' + err.message);
