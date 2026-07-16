@@ -3,6 +3,7 @@
 import importlib
 import json
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,17 @@ UI_TEXT_FIELD_FIELDS = {"type", "id", "label", "required", "max_length", "placeh
 UI_SELECT_FIELD_FIELDS = {"type", "id", "label", "required", "options", "value"}
 UI_SELECT_OPTION_FIELDS = {"value", "label"}
 UI_CHECKBOX_FIELD_FIELDS = {"type", "id", "label", "required", "value"}
+UI_NUMBER_FIELD_FIELDS = {"type", "id", "label", "required", "min", "max", "value"}
+UI_NUMBER_LIMIT = 1e15
+
+
+def _is_ui_number(value) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and abs(value) <= UI_NUMBER_LIMIT
+    except OverflowError:
+        return False
 
 
 class PluginManager:
@@ -223,7 +235,7 @@ class PluginManager:
                     if isinstance(label, str):
                         label = label.strip()
                     if (
-                        field_type not in UI_TEXT_FIELD_TYPES | {"select", "checkbox"}
+                        field_type not in UI_TEXT_FIELD_TYPES | {"select", "checkbox", "number"}
                         or not isinstance(field_id, str)
                         or not UI_NAME_RE.fullmatch(field_id)
                         or field_id in field_ids
@@ -233,6 +245,34 @@ class PluginManager:
                     ):
                         return None
                     field_ids.add(field_id)
+                    if field_type == "number":
+                        if not set(field).issubset(UI_NUMBER_FIELD_FIELDS):
+                            return None
+                        minimum = field.get("min")
+                        maximum = field.get("max")
+                        value = field.get("value")
+                        if any(
+                            item is not None and not _is_ui_number(item)
+                            for item in (minimum, maximum, value)
+                        ):
+                            return None
+                        if minimum is not None and maximum is not None and minimum > maximum:
+                            return None
+                        if value is not None and (
+                            (minimum is not None and value < minimum)
+                            or (maximum is not None and value > maximum)
+                        ):
+                            return None
+                        normalized_fields.append({
+                            "type": "number",
+                            "id": field_id,
+                            "label": label,
+                            "required": required,
+                            "min": minimum,
+                            "max": maximum,
+                            "value": value,
+                        })
+                        continue
                     if field_type == "checkbox":
                         if set(field) != UI_CHECKBOX_FIELD_FIELDS:
                             return None
@@ -467,7 +507,17 @@ class PluginManager:
         normalized_values = {}
         for field in fields:
             value = values.get(field["id"])
-            if field["type"] == "checkbox":
+            if field["type"] == "number":
+                if value is None:
+                    if field["required"]:
+                        return None
+                elif (
+                    not _is_ui_number(value)
+                    or (field["min"] is not None and value < field["min"])
+                    or (field["max"] is not None and value > field["max"])
+                ):
+                    return None
+            elif field["type"] == "checkbox":
                 if type(value) is not bool or (field["required"] and not value):
                     return None
             else:

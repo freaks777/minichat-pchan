@@ -1,6 +1,6 @@
 # プラグイン開発ガイド
 
-> 現行UIスキーマ: version 8<br>
+> 現行UIスキーマ: version 9<br>
 > アーキテクチャとセキュリティの正本は `RPスタンドアロンアプリ_設計書.md`。この文書は実装手順とコード例を扱う。
 
 ## 1. 信頼境界
@@ -124,7 +124,7 @@ priorityは小さい順に実行され、同値では設定上のロード順を
 
 `critical=True` は失敗後の処理継続が危険な場合だけ使う。例は外部送信前の機密値保護。通常の補助機能はfalseにする。
 
-## 8. 動的UI version 8
+## 8. 動的UI version 9
 
 `get_ui_slot()` は単一dict、最大4件のlist、またはNoneを返す。
 
@@ -222,14 +222,15 @@ status levelは `info` / `success` / `warning` / `error`。button同士はaction
 ```
 
 - fieldsは1〜10件、field IDはform内で一意
-- `type` は `text` / `textarea` / `select` / `checkbox`。省略時は `text`
+- `type` は `text` / `textarea` / `select` / `checkbox` / `number`。省略時は `text`
 - text/textareaのmax_lengthは1〜2000、placeholderは100文字以下
 - selectのoptionsは1〜50件、各optionは `{value, label}` のみ
 - option valueは200文字以下かつfield内で一意、labelは1〜80文字
 - selectの初期値と送信値は定義済みoption valueに限定
 - checkboxのvalueと送信値はboolのみ。requiredの場合はTrue必須
+- numberは有限なint/floatまたはnull。±1e15以内でmin/maxを検証
 - form actionはplugin内で一意、button actionとの衝突禁止
-- password、file、number、複数選択select、checkbox groupは未対応
+- password、file、複数選択select、checkbox group、number stepは未対応
 
 送信payloadは固定の `{form_id, values}` 形式:
 
@@ -240,7 +241,7 @@ status levelは `info` / `success` / `warning` / `error`。button同士はaction
 }
 ```
 
-コアは構造、field集合、型、required、max_length、selectのoption一致、およびcheckboxのbool値を検証する。pluginは値の意味、許可範囲、identifier、path等を追加検証する。
+コアは構造、field集合、型、required、max_length、selectのoption一致、checkboxのbool値、およびnumberの有限値・min/maxを検証する。pluginは値の意味、許可範囲、identifier、path等を追加検証する。
 
 ## 11. UI action
 

@@ -510,6 +510,25 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
                     PluginManager._validate_ui_definition(plugin, invalid)
                 )
 
+    def test_accepts_and_rejects_number_definitions(self):
+        plugin = self.plugin("demo", definition=self.definition())
+        number = {
+            "type": "number", "id": "amount", "label": "Amount",
+            "required": False, "min": -1e15, "max": 1e15, "value": None,
+        }
+        definition = self.definition(components=[self.form_component(fields=[number])])
+        normalized = PluginManager._validate_ui_definition(plugin, definition)
+        self.assertEqual(normalized["components"][0]["fields"][0], number)
+        invalid = [
+            {**number, "value": True}, {**number, "value": "1"},
+            {**number, "value": float("nan")}, {**number, "value": float("inf")},
+            {**number, "value": 1e16}, {**number, "min": 2, "max": 1},
+            {**number, "min": 0, "value": -1}, {**number, "extra": 1},
+        ]
+        for field in invalid:
+            with self.subTest(field=field):
+                item = self.definition(components=[self.form_component(fields=[field])])
+                self.assertIsNone(PluginManager._validate_ui_definition(plugin, item))
     def test_rejects_invalid_text_form_definitions(self):
         plugin = self.plugin("demo", definition=self.definition())
         valid = self.form_component()
@@ -653,6 +672,31 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     await rejecting.dispatch_ui_action("demo", "search", invalid)
 
+    async def test_validates_number_payload_null_finite_and_bounds(self):
+        number = {
+            "type": "number", "id": "amount", "label": "Amount",
+            "required": False, "min": 0, "max": 10, "value": None,
+        }
+        definition = self.definition(components=[self.form_component(fields=[number])])
+        manager = self.manager([self.plugin("demo", definition=definition)])
+        for value in (None, 0, 2.5, 10):
+            result = await manager.dispatch_ui_action("demo", "search", {
+                "form_id": "search-form", "values": {"amount": value},
+            })
+            self.assertEqual(result["data"]["values"]["amount"], value)
+        for value in (True, "1", float("nan"), float("inf"), -1, 11):
+            rejecting = self.manager([self.plugin("demo", definition=definition, error="action")])
+            with self.assertRaises(ValueError):
+                await rejecting.dispatch_ui_action("demo", "search", {
+                    "form_id": "search-form", "values": {"amount": value},
+                })
+        required = {**number, "required": True}
+        required_def = self.definition(components=[self.form_component(fields=[required])])
+        required_manager = self.manager([self.plugin("required", definition=required_def)])
+        with self.assertRaises(ValueError):
+            await required_manager.dispatch_ui_action("required", "search", {
+                "form_id": "search-form", "values": {"amount": None},
+            })
     async def test_rejects_invalid_form_payload_before_plugin_handler(self):
         form = self.form_component()
         definition = self.definition(components=[form])
@@ -972,7 +1016,7 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn('@app.get("/api/plugins/ui")', main_source)
-        self.assertIn('"version": 8', main_source)
+        self.assertIn('"version": 9', main_source)
         self.assertIn(
             '@app.post("/api/plugins/{plugin_name}/actions/{action}")',
             main_source,
@@ -994,7 +1038,7 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('button.textContent = component.label', script)
         self.assertIn('status.textContent = component.text', script)
         self.assertIn('separator.setAttribute("role", "separator")', script)
-        self.assertIn('payload.version !== 8', script)
+        self.assertIn('payload.version !== 9', script)
         self.assertIn('const groups = new Map()', script)
         self.assertIn('if (!groups.has(pluginName)) groups.set(pluginName, [])', script)
         self.assertIn('function validPluginDefinitions(definitions)', script)
@@ -1012,7 +1056,8 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('document.createElement("select")', script)
         self.assertIn('input.type = "checkbox"', script)
         self.assertIn('input.checked = field.value', script)
-        self.assertIn('input.type === "checkbox" ? input.checked : input.value', script)
+        self.assertIn('input.type === "checkbox"', script)
+        self.assertIn('input.valueAsNumber', script)
         self.assertIn('option.textContent = item.label', script)
         self.assertIn('input.autocomplete = "off"', script)
         self.assertIn('input.value = field.value', script)
@@ -1038,7 +1083,7 @@ class PluginDevelopmentGuideTests(unittest.IsolatedAsyncioTestCase):
         compile(source, str(template), "exec")
 
         for required in [
-            "version 8",
+            "version 9",
             "chat.input_actions",
             "chat.toolbar",
             "studio.actions",
@@ -1079,6 +1124,7 @@ class PluginDevelopmentGuideTests(unittest.IsolatedAsyncioTestCase):
             "form_id": "settings-form",
             "values": {
                 "display_name": "Example", "mode": "safe", "enabled": False,
+                "limit": None,
             },
         })
         self.assertEqual(saved["status"], "ok")

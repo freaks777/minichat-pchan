@@ -19,7 +19,7 @@
 
 | 項目 | 詳細 | 参照 |
 |------|------|------|
-| 動的プラグインUI拡張 | number fieldとsecrets連携 | UI基盤version 8 |
+| 動的プラグインUI拡張 | secrets連携 | UI基盤version 9 |
 | memory依存の定期更新 | 4パッケージを一体で更新し、クリーンvenv・実モデル・通常起動を再検証 | `requirements.txt` |
 
 ### 3. 設計・UI改善

@@ -1216,3 +1216,17 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/plugins/plugin_manager.py`, `backend/main.py`, `backend/plugins/_template/plugin.py`, `frontend/js/plugin-ui.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/plugin_development.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: 回帰テスト63件成功、Plugin UIテスト29件成功、ガイド・雛形テスト2件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし
+
+### 22.25 動的プラグインUI拡張 Phase 8（2026-07-17）
+
+- UIスキーマをversion 9へ更新し、form fieldへ `number` を追加
+- optional空値をnull、required送信値を有限number必須として定義
+- bool、文字列、NaN、Infinity、±1e15超過を定義・payloadの両方で拒否
+- min/maxと初期値・送信値の範囲をhandler呼出前に検証
+- フロントはinput number、step any、valueAsNumberを使用し、空欄をnullとして送信
+- 既存text/textarea/select/checkbox契約とversion 8互換を維持
+- 雛形、開発ガイド、設計書、backlogをversion 9へ同期
+
+**変更ファイル**: `backend/plugins/plugin_manager.py`, `backend/main.py`, `backend/plugins/_template/plugin.py`, `frontend/js/plugin-ui.js`, `tests/test_regressions.py`, `document/plugin_development.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: 回帰テスト65件成功、Plugin UIテスト31件成功、ガイド・雛形テスト2件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし

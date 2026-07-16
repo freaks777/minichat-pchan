@@ -871,7 +871,7 @@ async def get_plugin_ui():
     from fastapi.responses import JSONResponse
     return JSONResponse(
         content={
-            "version": 8,
+            "version": 9,
             "plugins": plugin_manager.collect_ui_definitions(),
         },
         headers=_no_store_headers(),
