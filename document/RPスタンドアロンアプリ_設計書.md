@@ -750,7 +750,11 @@ watchdog:
 - 重複範囲: 意味的類似や別セッション間の統合は行わず、セッションスコープ検索の互換性を維持する
 - `core/embedding.py`: `EmbeddingProvider` 抽象基底 + `SentenceTransformersProvider`（e5系モデル、`passage:`/`query:` プレフィックス、384次元、コサイン類似度）
 - 依存関係: `sentence-transformers==5.6.0`、`transformers==5.12.1`、`huggingface-hub>=1.5.0,<2.0`、`chromadb==1.5.9` を `requirements.txt` で一体管理し、更新時はクリーン環境の `pip check`・import・実モデル初期化・通常起動をまとめて検証する
-- コレクション: `rp_memory`（HNSW cosine、ペルソナID・セッションIDでフィルタ）
+- コレクション: `rp_memory`（HNSW cosine）。レコードは `session_fact`（会話由来）、`persona_base`（ペルソナ確定ファイル由来の派生索引）、`legacy`（旧形式）のkindで分類する
+- 通常検索: `session_fact` だけを対象とし、常時system promptへ入るSOUL/SKILLと `persona_base` を重複注入しない
+- persona基本情報: `SOUL.md` / `SKILL.md` / `style.yaml` がすべて揃った保存・更新・import完了後に、追加LLM呼び出しなしで3文書を索引化する。3ファイルが正本であり、ChromaDBは再生成可能な派生索引とする
+- persona索引ID: `persona_id`・`kind=persona_base`・source・NFKC/改行正規化済み内容のSHA-256。3ファイル全体の `source_hash` と短縮revisionをmetadataへ保存し、更新時は同一personaの旧 `persona_base` を置換する
+- 障害境界: Memory未設定、不完全persona、embedding/ChromaDB障害でもpersona本体の保存/importは成功させ、`warning.resource=persona_base` と再構築可能フラグを返す。`POST /api/memory/personas/{persona_id}/rebuild` で確定ファイルから再構築できる
 - 設定: `config.yaml` の `chroma` セクション（`path`, `embedding_model`, `embedding_cache`）
 
 ```yaml

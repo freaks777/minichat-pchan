@@ -34,6 +34,7 @@ LEADING_BULLET_RE = re.compile(
 MEMORY_KIND_SESSION_FACT = "session_fact"
 MEMORY_KIND_PERSONA_BASE = "persona_base"
 MEMORY_KIND_LEGACY = "legacy"
+PERSONA_BASE_FILES = ("SOUL.md", "SKILL.md", "style.yaml")
 
 
 def normalize_fact(fact: str) -> str:
@@ -61,6 +62,37 @@ def fact_id(persona_id: str, session_id: str, fact: str) -> str:
     separator = chr(0)
     source = separator.join((persona_id, session_id, normalize_fact(fact)))
     return "fact_" + hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def persona_base_id(persona_id: str, source: str, content: str) -> str:
+    """ペルソナ基本情報の確定内容に決定的なIDを割り当てる。"""
+    separator = chr(0)
+    normalized = unicodedata.normalize("NFKC", content).replace("\r\n", "\n").strip()
+    value = separator.join((persona_id, MEMORY_KIND_PERSONA_BASE, source, normalized))
+    return "persona_" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _persona_base_documents(persona_dir: Path) -> tuple[str, list[str], list[str]]:
+    """確定済み3ファイルを決定的な文書列とsource hashへ変換する。"""
+    missing = [name for name in PERSONA_BASE_FILES if not (persona_dir / name).is_file()]
+    if missing:
+        raise ValueError("incomplete_persona:" + ",".join(missing))
+
+    contents = []
+    for name in PERSONA_BASE_FILES:
+        text = (persona_dir / name).read_text(encoding="utf-8")
+        normalized = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").strip()
+        contents.append(normalized)
+    source_value = chr(0).join(
+        f"{name}\n{content}" for name, content in zip(PERSONA_BASE_FILES, contents)
+    )
+    source_hash = hashlib.sha256(source_value.encode("utf-8")).hexdigest()
+    documents = [
+        f"[{name}]\n{content}" for name, content in zip(PERSONA_BASE_FILES, contents)
+        if content
+    ]
+    sources = [name for name, content in zip(PERSONA_BASE_FILES, contents) if content]
+    return source_hash, sources, documents
 
 
 class MemoryPlugin(PluginBase):
@@ -254,6 +286,46 @@ class MemoryPlugin(PluginBase):
         except Exception as e:
             logger.error("memory: ChromaDB upsert failed (%s)", e)
             return 0
+
+    async def index_persona_base(self, persona_id: str, persona_dir: Path) -> dict:
+        """確定済みpersonaファイルから派生索引を置換構築する。"""
+        if not persona_id:
+            raise ValueError("persona_id is required")
+        if self._collection is None or self._embedding_provider is None:
+            raise RuntimeError("memory_unavailable")
+
+        source_hash, sources, documents = _persona_base_documents(Path(persona_dir))
+        embeddings = await asyncio.to_thread(self._embedding_provider.encode, documents)
+        ids = [
+            persona_base_id(persona_id, source, document)
+            for source, document in zip(sources, documents)
+        ]
+        metadatas = [
+            {
+                "persona_id": persona_id,
+                "kind": MEMORY_KIND_PERSONA_BASE,
+                "source": source,
+                "source_hash": source_hash,
+                "revision": source_hash[:12],
+            }
+            for source in sources
+        ]
+        where = {"$and": [
+            {"persona_id": persona_id},
+            {"kind": MEMORY_KIND_PERSONA_BASE},
+        ]}
+        old_ids, _ = await self._matching_records(where)
+        if old_ids:
+            await asyncio.to_thread(self._collection.delete, ids=old_ids)
+        await asyncio.to_thread(
+            self._collection.upsert,
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+        logger.info("memory: indexed %d persona base documents for %s", len(ids), persona_id)
+        return {"indexed_count": len(ids), "source_hash": source_hash}
 
     # ── 管理 ──────────────────────────────────────────────────
 

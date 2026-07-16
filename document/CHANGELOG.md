@@ -1270,3 +1270,15 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/main.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: P1/P3対象テスト7件成功、全回帰73件成功、Python構文チェック成功、`git diff --check` 問題なし
+
+### 22.29 P2 Phase 3 persona基本情報の派生索引（2026-07-17）
+
+- `SOUL.md` / `SKILL.md` / `style.yaml` が揃った完全なpersonaを、保存・更新・import完了後に `kind=persona_base` としてChromaDBへ索引化
+- 追加LLM呼び出しは行わず、確定ファイルをNFKC・改行正規化してsource別の決定的ID、3ファイル共通の `source_hash`、revisionを生成
+- 更新時は同一personaの旧 `persona_base` を削除して現在内容へ置換し、通常会話検索は引き続き `session_fact` のみに限定
+- Memory未設定、不完全persona、索引障害でもpersona本体の保存/importは成功し、再構築可能なwarningを返す
+- `POST /api/memory/personas/{persona_id}/rebuild` を追加し、正本ファイルから派生索引を手動再構築可能にした
+
+**変更ファイル**: `backend/main.py`, `backend/plugins/memory/plugin.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: 全回帰85件成功、Python構文チェック成功、`git diff --check` 問題なし

@@ -1518,6 +1518,37 @@ def _memory_management_plugin():
     return plugin if getattr(plugin, "_collection", None) is not None else None
 
 
+async def _index_persona_base(persona_id: str) -> dict:
+    """派生索引の失敗をpersona本体の保存失敗へ波及させない。"""
+    plugin = _memory_management_plugin()
+    if plugin is None:
+        return {"code": "memory_unavailable", "rebuild_available": True}
+    try:
+        return await plugin.index_persona_base(persona_id, PERSONAS_DIR / persona_id)
+    except ValueError as e:
+        detail = str(e)
+        code = "incomplete_persona" if detail.startswith("incomplete_persona:") else "index_failed"
+        logger.warning("persona base index skipped for %s (%s)", persona_id, detail)
+        return {"code": code, "rebuild_available": True}
+    except Exception:
+        logger.exception("persona base index failed for %s", persona_id)
+        return {"code": "index_failed", "rebuild_available": True}
+
+
+@app.post("/api/memory/personas/{persona_id}/rebuild")
+async def rebuild_persona_base(persona_id: str):
+    """確定済みpersonaファイルから派生索引を再構築する。"""
+    from fastapi.responses import JSONResponse
+    validate_persona_id(persona_id)
+    if not (PERSONAS_DIR / persona_id).is_dir():
+        return JSONResponse(status_code=404, content={"error": "persona_not_found"})
+    result = await _index_persona_base(persona_id)
+    if "code" in result:
+        status_code = 503 if result["code"] == "memory_unavailable" else 409
+        return JSONResponse(status_code=status_code, content={"error": result["code"]})
+    return {"status": "ok", **result}
+
+
 @app.get("/api/memory/stats")
 async def memory_stats():
     """Return metadata-only Memory counts."""
@@ -2316,8 +2347,14 @@ async def save_persona(req: SavePersonaRequest):
         )
         # 下書きを自動削除（保存完了後は不要）
         await plugin_manager.get("persona_studio").delete_draft(persona_id)
+        index_result = await _index_persona_base(persona_id)
         logger.info("persona saved: %s", persona_id)
-        return {"status": "ok", "persona_id": persona_id}
+        response = {"status": "ok", "persona_id": persona_id}
+        if "code" in index_result:
+            response["warning"] = {"resource": "persona_base", **index_result}
+        else:
+            response["persona_base"] = index_result
+        return response
     except Exception as e:
         logger.error("save failed: %s", e)
         return {"error": str(e)}
@@ -2372,8 +2409,14 @@ async def import_persona(req: ImportPersonaRequest):
     if not imported:
         return {"error": "no SOUL.md, SKILL.md, or style.yaml found in source directory"}
 
+    index_result = await _index_persona_base(persona_id)
     logger.info("persona imported: %s ← %s (%s)", persona_id, source_dir, ", ".join(imported))
-    return {"status": "ok", "persona_id": persona_id, "imported": imported}
+    response = {"status": "ok", "persona_id": persona_id, "imported": imported}
+    if "code" in index_result:
+        response["warning"] = {"resource": "persona_base", **index_result}
+    else:
+        response["persona_base"] = index_result
+    return response
 
 
 @app.get("/api/persona-studio/load/{persona_id}")

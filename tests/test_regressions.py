@@ -35,6 +35,7 @@ from plugins.memory.plugin import (
     deduplicate_facts,
     fact_id,
     normalize_fact,
+    persona_base_id,
 )
 from plugins.session_log.plugin import SessionLogPlugin
 from plugins.secrets.plugin import SecretsPlugin
@@ -1536,6 +1537,103 @@ class MemoryDeduplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('@app.get("/api/memory/stats")', source)
         self.assertIn('@app.get("/api/memory/orphans")', source)
         self.assertNotIn('@app.delete("/api/memory/', source)
+
+    async def test_persona_base_index_is_deterministic_and_replaces_old_records(self):
+        collection = mock.MagicMock()
+        collection.get.return_value = {"ids": ["old"], "metadatas": [{}]}
+        embedding = mock.MagicMock()
+        embedding.encode.return_value = [[0.1], [0.2], [0.3]]
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+        plugin._embedding_provider = embedding
+
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            persona_dir = Path(tmp)
+            (persona_dir / "SOUL.md").write_text("# Soul\nName: Alice\n", encoding="utf-8")
+            (persona_dir / "SKILL.md").write_text("# Skill\n- Talk", encoding="utf-8")
+            (persona_dir / "style.yaml").write_text("tone: calm\n", encoding="utf-8")
+            first = await plugin.index_persona_base("alice", persona_dir)
+            second = await plugin.index_persona_base("alice", persona_dir)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["indexed_count"], 3)
+        embedding.encode.assert_called_with([
+            "[SOUL.md]\n# Soul\nName: Alice",
+            "[SKILL.md]\n# Skill\n- Talk",
+            "[style.yaml]\ntone: calm",
+        ])
+        self.assertEqual(collection.delete.call_args_list, [
+            mock.call(ids=["old"]),
+            mock.call(ids=["old"]),
+        ])
+        self.assertEqual(collection.upsert.call_count, 2)
+        first_upsert = collection.upsert.call_args_list[0].kwargs
+        second_upsert = collection.upsert.call_args_list[1].kwargs
+        self.assertEqual(first_upsert["ids"], second_upsert["ids"])
+        self.assertEqual(first_upsert["metadatas"], second_upsert["metadatas"])
+        for source, document, memory_id, metadata in zip(
+            ("SOUL.md", "SKILL.md", "style.yaml"),
+            first_upsert["documents"],
+            first_upsert["ids"],
+            first_upsert["metadatas"],
+        ):
+            self.assertEqual(memory_id, persona_base_id("alice", source, document))
+            self.assertEqual(metadata["kind"], MEMORY_KIND_PERSONA_BASE)
+            self.assertEqual(metadata["source_hash"], first["source_hash"])
+
+    async def test_persona_base_requires_complete_persona_before_embedding(self):
+        plugin = MemoryPlugin()
+        plugin._collection = mock.MagicMock()
+        plugin._embedding_provider = mock.MagicMock()
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            (Path(tmp) / "SOUL.md").write_text("Soul", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "incomplete_persona"):
+                await plugin.index_persona_base("alice", Path(tmp))
+        plugin._embedding_provider.encode.assert_not_called()
+        plugin._collection.get.assert_not_called()
+
+    async def test_persona_save_succeeds_with_index_warning(self):
+        import main as app_main
+
+        studio = mock.MagicMock()
+        studio.delete_draft = mock.AsyncMock()
+        manager = mock.MagicMock()
+        manager.has.return_value = True
+        manager.get.return_value = studio
+        warning = {"code": "index_failed", "rebuild_available": True}
+        with mock.patch.object(app_main, "plugin_manager", manager), mock.patch.object(
+            app_main, "_index_persona_base", mock.AsyncMock(return_value=warning)
+        ) as index_mock:
+            result = await app_main.save_persona(
+                app_main.SavePersonaRequest(persona_id="alice", draft={"soul_md": "Soul"})
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["warning"], {"resource": "persona_base", **warning})
+        studio.save.assert_called_once()
+        studio.delete_draft.assert_awaited_once_with("alice")
+        index_mock.assert_awaited_once_with("alice")
+
+    async def test_persona_import_succeeds_with_index_warning(self):
+        import main as app_main
+
+        warning = {"code": "incomplete_persona", "rebuild_available": True}
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            root = Path(tmp)
+            source_dir = root / "source"
+            source_dir.mkdir()
+            (source_dir / "SOUL.md").write_text("Soul", encoding="utf-8")
+            with mock.patch.object(app_main, "PERSONAS_DIR", root / "personas"), mock.patch.object(
+                app_main, "_index_persona_base", mock.AsyncMock(return_value=warning)
+            ) as index_mock:
+                result = await app_main.import_persona(app_main.ImportPersonaRequest(
+                    persona_id="alice", source_dir=str(source_dir)
+                ))
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["imported"], ["SOUL.md"])
+        self.assertEqual(result["warning"], {"resource": "persona_base", **warning})
+        index_mock.assert_awaited_once_with("alice")
 
 
 class SecretsTests(unittest.TestCase):
