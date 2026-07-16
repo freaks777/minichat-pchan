@@ -1317,3 +1317,15 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/main.py`, `frontend/index.html`, `frontend/js/chat.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: 送信・停止契約テスト3件成功、全回帰93件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし
+
+### 22.33 P6 Setup・Studio・状態パネルのレイアウト調整（2026-07-17）
+
+- Setupのpersonaカードを内容高に揃え、余白をカード間へ集約。520px以下では1列表示として横切れを防止
+- Studioの複数入力fieldを狭幅時に縦積みし、タブとテスト入力の最小幅を解除
+- Chatのヘッダー文字列を省略表示し、入力欄へ `min-width: 0` を設定して送信・機密ボタンを含む横切れを防止
+- 状態パネルは入力欄直上のDOM順を維持し、狭幅時は最大 `min(40vh, 240px)` まで上方向へ拡張
+- 500px幅のSetup実画面で、カードの内容高、1列表示、左右余白、下部ボタンを確認
+
+**変更ファイル**: `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: レスポンシブ契約テスト3件成功、全回帰96件成功、500px実画面確認、Python構文チェック成功、`git diff --check` 問題なし

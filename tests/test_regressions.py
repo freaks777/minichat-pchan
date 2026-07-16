@@ -2133,6 +2133,29 @@ class FrontendXssTests(unittest.TestCase):
             self.assertNotIn("<script>", source)
             self.assertNotIn(' style=', source)
 
+class ResponsiveLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
+
+    def test_setup_cards_keep_content_height_and_stack_on_compact_viewports(self):
+        self.assertIn("align-content: start;", self.css)
+        self.assertIn("grid-auto-rows: max-content;", self.css)
+        compact = self.css[self.css.index("@media (max-width: 520px)") :]
+        self.assertIn(".persona-grid { grid-template-columns: 1fr; }", compact)
+
+    def test_compact_studio_and_chat_controls_do_not_force_horizontal_overflow(self):
+        compact = self.css[self.css.index("@media (max-width: 520px)") :]
+        self.assertIn(".studio-field-row { flex-direction: column; }", compact)
+        self.assertIn("#input-area textarea { min-width: 0;", compact)
+        self.assertIn(".header-left { gap: 6px; overflow: hidden; }", compact)
+
+    def test_state_panel_remains_above_input_and_grows_upward(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        self.assertLess(html.index('id="state-panel"'), html.index('id="input-area"'))
+        compact = self.css[self.css.index("@media (max-width: 520px)") :]
+        self.assertIn("#state-panel { padding: 8px 10px; max-height: min(40vh, 240px); }", compact)
+
 class CspPolicyTests(unittest.TestCase):
     def test_enforced_policy_and_report_endpoint_are_configured(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")

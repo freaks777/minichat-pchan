@@ -633,6 +633,8 @@ label { font-size: 14px; color: var(--text-muted); }
   flex: 1;
   overflow-y: auto;
   padding-right: 4px;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .persona-card {
@@ -1218,6 +1220,40 @@ input.invalid {
 .studio-test-input-row { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--surface); }
 .studio-test-message { flex: 1; resize: none; font: inherit; padding: 8px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; line-height: 1.5; max-height: calc(1.5em * 3 + 16px); }
 
+/* ── Compact viewport layout ── */
+@media (max-width: 520px) {
+  #top-nav { gap: 0; padding: 0 6px; }
+  #top-nav a { padding: 4px 7px; font-size: 12px; }
+  #top-nav #lang-toggle { padding: 2px 5px; }
+
+  #header { padding: 7px 8px; gap: 6px; }
+  .header-left { gap: 6px; overflow: hidden; }
+  #header-persona,
+  #header-model,
+  #header-style { overflow: hidden; text-overflow: ellipsis; }
+  #header-style { max-width: 96px; }
+  .header-right { gap: 4px; min-width: 0; }
+
+  #log { padding: 12px 10px; }
+  #state-panel { padding: 8px 10px; max-height: min(40vh, 240px); }
+  #input-area { padding: 8px; gap: 6px; }
+  #input-area textarea { min-width: 0; padding: 9px 10px; }
+  #input-area button { padding: 9px 12px; }
+  #input-area #secret-btn { padding: 9px 10px; }
+
+  #setup-ui { padding: 18px 0 0; }
+  .step { padding: 0 12px 12px; }
+  .step-sub { margin-bottom: 16px; }
+  .persona-grid { grid-template-columns: 1fr; }
+  #next-to-style { margin-top: 12px; }
+
+  #studio-ui { padding: 12px 10px 32px; }
+  #studio-header { gap: 8px; }
+  .tab-row button { min-width: 0; padding: 8px 4px; font-size: 12px; }
+  .studio-field-row { flex-direction: column; }
+  .studio-test-input-row { padding: 8px; }
+  .studio-test-message { min-width: 0; }
+}
 /* ── Dynamic plugin UI ── */
 .plugin-ui-slot {
   display: flex;
