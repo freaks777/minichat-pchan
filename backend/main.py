@@ -1590,6 +1590,20 @@ def _delete_file_resource(path: Path) -> dict:
         return {"status": "error", "count": 0, "error": "delete_failed"}
 
 
+def _delete_tree_resource(path: Path) -> dict:
+    """Delete one directory tree idempotently and count contained files."""
+    import shutil
+    try:
+        if not path.exists():
+            return {"status": "not_found", "count": 0}
+        count = sum(1 for item in path.rglob("*") if item.is_file())
+        shutil.rmtree(path)
+        return {"status": "deleted", "count": count}
+    except Exception:
+        logger.exception("resource tree delete failed: %s", path.name)
+        return {"status": "error", "count": 0, "error": "delete_failed"}
+
+
 @app.delete("/api/sessions/{persona_id}/{date}")
 async def delete_session(persona_id: str, date: str):
     """Delete a session across files, logs, Memory, and active runtime state."""
@@ -2446,22 +2460,111 @@ async def load_persona(persona_id: str):
     return {"status": "ok", "draft": draft}
 
 
+def _persona_delete_preview(persona_id: str) -> dict:
+    """Return resource counts for persona deletion without exposing contents."""
+    paths = {
+        "persona": PERSONAS_DIR / persona_id,
+        "sessions": sessions_dir / persona_id,
+        "session_log": BASE_DIR.parent / "session-log" / persona_id,
+    }
+    counts = {
+        name: sum(1 for item in path.rglob("*") if item.is_file()) if path.is_dir() else 0
+        for name, path in paths.items()
+    }
+    draft_exists = False
+    if plugin_manager.has("persona_studio"):
+        studio = plugin_manager.get("persona_studio")
+        draft_path = Path(studio._config.get("data_dir", "data")) / "drafts" / f"{persona_id}.json"
+        draft_exists = draft_path.is_file()
+    return {
+        "persona_id": persona_id,
+        "active": persona_manager.active == persona_id,
+        "resources": {**counts, "draft": 1 if draft_exists else 0},
+    }
+
+
+@app.get("/api/persona-studio/delete/{persona_id}/preview")
+async def preview_delete_persona(persona_id: str):
+    validate_persona_id(persona_id)
+    return _persona_delete_preview(persona_id)
+
+
 @app.delete("/api/persona-studio/delete/{persona_id}")
 async def delete_persona(persona_id: str):
-    """ペルソナディレクトリを削除する。"""
-    import shutil
+    """Delete an inactive persona across definitions, sessions, logs, draft, and Memory."""
+    from fastapi.responses import JSONResponse
     validate_persona_id(persona_id)
-    persona_dir = PERSONAS_DIR / persona_id
-    if not persona_dir.exists():
-        return {"error": f"persona '{persona_id}' not found"}
+    async with _api_lock:
+        if persona_manager.active == persona_id:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "active_persona", "detail": "switch_persona_required"},
+            )
 
-    try:
-        shutil.rmtree(persona_dir)
-        logger.info("persona deleted: %s", persona_id)
-        return {"status": "ok", "persona_id": persona_id}
-    except Exception as e:
-        logger.error("delete failed: %s", e)
-        return {"error": str(e)}
+        results = {
+            "sessions": _delete_tree_resource(sessions_dir / persona_id),
+            "session_log": _delete_tree_resource(BASE_DIR.parent / "session-log" / persona_id),
+        }
+        current_path = BASE_DIR / ".current-session"
+        current_matches = False
+        if current_path.exists():
+            try:
+                current_matches = json.loads(current_path.read_text(encoding="utf-8")).get("persona_id") == persona_id
+            except Exception:
+                logger.exception("current session read failed during persona delete")
+                results["current_session"] = {
+                    "status": "error", "count": 0, "error": "read_failed"
+                }
+        if "current_session" not in results:
+            results["current_session"] = (
+                _delete_file_resource(current_path)
+                if current_matches else {"status": "not_target", "count": 0}
+            )
+
+        if plugin_manager.has("persona_studio"):
+            try:
+                deleted = await plugin_manager.get("persona_studio").delete_draft(persona_id)
+                results["draft"] = {
+                    "status": "deleted" if deleted else "not_found",
+                    "count": 1 if deleted else 0,
+                }
+            except Exception:
+                logger.exception("draft delete failed for %s", persona_id)
+                results["draft"] = {"status": "error", "count": 0, "error": "delete_failed"}
+        else:
+            results["draft"] = {"status": "disabled", "count": 0}
+
+        memory_plugin = _memory_management_plugin()
+        if not plugin_manager.has("memory"):
+            results["memory"] = {"status": "disabled", "count": 0}
+        elif memory_plugin is None:
+            results["memory"] = {
+                "status": "error", "count": 0, "error": "memory_unavailable"
+            }
+        else:
+            try:
+                deleted = await memory_plugin.delete_persona(persona_id)
+                results["memory"] = {
+                    "status": "deleted" if deleted else "not_found", "count": deleted
+                }
+            except Exception:
+                logger.exception("memory delete failed for persona %s", persona_id)
+                results["memory"] = {"status": "error", "count": 0, "error": "delete_failed"}
+
+        results["persona"] = _delete_tree_resource(PERSONAS_DIR / persona_id)
+        errors = [name for name, result in results.items() if result["status"] == "error"]
+        deleted_count = sum(result["count"] for result in results.values())
+        status = "ok" if not errors else ("partial" if deleted_count else "error")
+        response = {
+            "status": status,
+            "persona_id": persona_id,
+            "deleted_count": deleted_count,
+            "resources": results,
+        }
+        if errors:
+            response.update({"retry": True, "failed_resources": errors})
+        logger.info("persona delete result: %s status=%s deleted=%d", persona_id, status, deleted_count)
+        return response
 
 
 # ── SSE チャット ─────────────────────────────────────────────────

@@ -256,6 +256,14 @@ class PersonaManager:
 
 フロント側：チャット画面上部にペルソナ一覧（アイコンまたはドロップダウン）を表示し、クリックで `/api/persona/switch` を呼び出す。
 
+**ペルソナ削除契約**:
+
+- `GET /api/persona-studio/delete/{persona_id}/preview` はpersona定義、sessions（state/meta sidecarを含む）、session-log、draftの件数とactive状態だけを返し、内容は公開しない
+- active personaは削除せず、先に別personaへ切り替えるよう `409 active_persona / switch_persona_required` で拒否する
+- inactive personaの削除はAPI lock内で、sessions、session-log、対象current-session、draft、personaに紐づく全Memory kind、persona定義を資源単位に冪等削除する
+- ファイルとChromaDBを跨ぐtransactionは作らず、`resources`、`deleted_count`、`status=ok|partial|error` を返す。部分失敗は `retry=true` と `failed_resources` を返し、同じAPIを安全に再実行できる
+- フロントはpreview件数を確認dialogへ表示し、partial/error時は一覧カードを残して再試行可能にする
+
 ### 3.3.2 StyleProfile（文体設定、コア機能）
 
 **StyleProfileはキャラクターの口調や人格を定義するものではない。** 一人称・三人称の視点選択、地の文の有無、描写方針など、物語の語り方（カメラワーク）を制御する設定である。キャラクター固有の一人称（「俺」「私」）・語尾・敬語などの言葉遣いは SOUL.md が担当する。

@@ -814,15 +814,29 @@ async function loadDraft(personaId) {
 }
 
 async function deletePersona(personaId) {
-  if (!confirm("ペルソナ '" + personaId + "' を削除しますか？")) return;
-  setStatus("削除中...");
   try {
+    const previewRes = await fetch("/api/persona-studio/delete/" + encodeURIComponent(personaId) + "/preview");
+    const preview = await previewRes.json();
+    if (preview.error) { setStatus(preview.error, true); showToast(preview.error, true); return; }
+    if (preview.active) {
+      const message = "使用中のペルソナは削除できません。先に別のペルソナへ切り替えてください。";
+      setStatus(message, true); showToast(message, true); return;
+    }
+    const resources = preview.resources || {};
+    const count = Object.values(resources).reduce((sum, value) => sum + Number(value || 0), 0);
+    if (!confirm("ペルソナ '" + personaId + "' と関連データ " + count + " 件を削除しますか？")) return;
+    setStatus("削除中...");
     const res = await fetch("/api/persona-studio/delete/" + encodeURIComponent(personaId), { method: "DELETE" });
     const data = await res.json();
     if (data.error) { setStatus(data.error, true); showToast(data.error, true); return; }
+    if (data.status === "partial" || data.status === "error") {
+      const failed = (data.failed_resources || []).join(", ") || "unknown";
+      const message = "一部の削除に失敗しました (" + failed + ")。再試行してください。";
+      setStatus(message, true); showToast(message, true); return;
+    }
     setStatus("削除しました: " + personaId);
     showToast("✓ 削除: " + personaId);
-    loadSavedPersonas();
+    await loadSavedPersonas();
   } catch (err) { setStatus("削除失敗: " + err, true); showToast("削除失敗: " + err, true); }
 }
 

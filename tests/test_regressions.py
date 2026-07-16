@@ -1790,6 +1790,113 @@ class SessionListContractTests(unittest.TestCase):
         )
 
 
+class PersonaDeleteLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_active_persona_is_rejected_before_deletion(self):
+        import main as app_main
+
+        manager = mock.MagicMock()
+        manager.active = "alice"
+        with mock.patch.object(app_main, "persona_manager", manager):
+            response = await app_main.delete_persona("alice")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn(b"active_persona", response.body)
+
+    async def test_inactive_persona_deletes_all_resources_and_is_idempotent(self):
+        import main as app_main
+
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            root = Path(tmp)
+            base_dir = root / "backend"
+            personas_dir = root / "personas"
+            local_sessions = root / "sessions"
+            persona_dir = personas_dir / "alice"
+            session_dir = local_sessions / "alice"
+            log_dir = root / "session-log" / "alice"
+            draft_dir = root / "data" / "drafts"
+            for path in (base_dir, persona_dir, session_dir, log_dir, draft_dir):
+                path.mkdir(parents=True, exist_ok=True)
+            (persona_dir / "SOUL.md").write_text("Soul", encoding="utf-8")
+            (session_dir / "one.jsonl").write_text("{}", encoding="utf-8")
+            (session_dir / "one_state.json").write_text("{}", encoding="utf-8")
+            (log_dir / "one.md").write_text("log", encoding="utf-8")
+            draft_path = draft_dir / "alice.json"
+            draft_path.write_text("{}", encoding="utf-8")
+            (base_dir / ".current-session").write_text(
+                '{"persona_id":"alice"}', encoding="utf-8"
+            )
+
+            studio = mock.MagicMock()
+            studio._config = {"data_dir": str(root / "data")}
+            async def delete_draft(persona_id):
+                if draft_path.exists():
+                    draft_path.unlink()
+                    return True
+                return False
+            studio.delete_draft = mock.AsyncMock(side_effect=delete_draft)
+            memory = mock.MagicMock()
+            memory._collection = object()
+            memory.delete_persona = mock.AsyncMock(side_effect=[3, 0])
+            plugins = mock.MagicMock()
+            plugins.has.side_effect = lambda name: name in {"persona_studio", "memory"}
+            plugins.get.side_effect = lambda name: studio if name == "persona_studio" else memory
+            manager = mock.MagicMock()
+            manager.active = "bob"
+
+            patches = (
+                mock.patch.object(app_main, "BASE_DIR", base_dir),
+                mock.patch.object(app_main, "PERSONAS_DIR", personas_dir),
+                mock.patch.object(app_main, "sessions_dir", local_sessions),
+                mock.patch.object(app_main, "plugin_manager", plugins),
+                mock.patch.object(app_main, "persona_manager", manager),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                preview = await app_main.preview_delete_persona("alice")
+                result = await app_main.delete_persona("alice")
+                retry = await app_main.delete_persona("alice")
+
+        self.assertFalse(preview["active"])
+        self.assertEqual(preview["resources"], {
+            "persona": 1, "sessions": 2, "session_log": 1, "draft": 1,
+        })
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["deleted_count"], 9)
+        self.assertEqual(result["resources"]["memory"]["count"], 3)
+        self.assertEqual(retry["status"], "ok")
+        self.assertEqual(retry["deleted_count"], 0)
+        self.assertEqual(retry["resources"]["persona"]["status"], "not_found")
+
+    async def test_memory_failure_returns_partial_retry_without_exposing_exception(self):
+        import main as app_main
+
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            root = Path(tmp)
+            base_dir = root / "backend"
+            persona_dir = root / "personas" / "alice"
+            base_dir.mkdir()
+            persona_dir.mkdir(parents=True)
+            (persona_dir / "SOUL.md").write_text("Soul", encoding="utf-8")
+            memory = mock.MagicMock()
+            memory._collection = object()
+            memory.delete_persona = mock.AsyncMock(side_effect=RuntimeError("secret detail"))
+            plugins = mock.MagicMock()
+            plugins.has.side_effect = lambda name: name == "memory"
+            plugins.get.return_value = memory
+            manager = mock.MagicMock()
+            manager.active = "bob"
+            with mock.patch.object(app_main, "BASE_DIR", base_dir), mock.patch.object(
+                app_main, "PERSONAS_DIR", root / "personas"
+            ), mock.patch.object(app_main, "sessions_dir", root / "sessions"), mock.patch.object(
+                app_main, "plugin_manager", plugins
+            ), mock.patch.object(app_main, "persona_manager", manager):
+                result = await app_main.delete_persona("alice")
+
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["retry"])
+        self.assertEqual(result["failed_resources"], ["memory"])
+        self.assertEqual(result["resources"]["memory"]["error"], "delete_failed")
+        self.assertNotIn("secret detail", str(result))
+
+
 class SessionDeleteLifecycleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

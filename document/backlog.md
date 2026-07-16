@@ -19,13 +19,12 @@
 
 | 順位 | 項目 | 次の対応 |
 |-----:|------|----------|
-| 1 | P2 セッション削除とMemory DBの整合性 | Phase 0〜3完了。次はPhase 4 persona削除統合（active persona保護、全sessions/draft/log/Memory、部分失敗・再試行） |
-| 2 | P4 Persona Studio保存後の表示維持 | 保存後もSOUL/SKILLと操作領域を維持し、新規・既存編集・下書き経路を確認 |
-| 3 | P5 チャット送信・停止UI | 通常送信・再生成・編集後送信を再確認し、同一位置での送信/停止切替と停止後復帰を統一 |
-| 4 | P6 Setup・Studio・状態パネルのレイアウト | 実画面で選択画面、スタイル、自由設定、上方向状態パネルをまとめて確認・調整 |
-| 5 | P7 Memory DB管理画面 | P2の管理API完成後に統計、preview、全件/persona/session/個別削除、孤児管理UIを追加 |
+| 1 | P4 Persona Studio保存後の表示維持 | 保存後もSOUL/SKILLと操作領域を維持し、新規・既存編集・下書き経路を確認 |
+| 2 | P5 チャット送信・停止UI | 通常送信・再生成・編集後送信を再確認し、同一位置での送信/停止切替と停止後復帰を統一 |
+| 3 | P6 Setup・Studio・状態パネルのレイアウト | 実画面で選択画面、スタイル、自由設定、上方向状態パネルをまとめて確認・調整 |
+| 4 | P7 Memory DB管理画面 | 完成したP2管理APIを使い、統計、preview、全件/persona/session/個別削除、孤児管理UIを追加 |
 
-P2とP7は削除API・孤児検出を共有するため、管理UIよりP2のライフサイクルAPIを先行する。
+P2 セッション削除とMemory DBの整合性はPhase 0〜4（一覧、schema/内部API、session削除、persona_base、persona削除）まで完了。
 
 ### 3. 長期運用改善
 

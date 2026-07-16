@@ -1282,3 +1282,15 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/main.py`, `backend/plugins/memory/plugin.py`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: 全回帰85件成功、Python構文チェック成功、`git diff --check` 問題なし
+
+### 22.30 P2 Phase 4 persona削除ライフサイクル統合（2026-07-17）
+
+- 削除前preview APIを追加し、persona定義、sessions、session-log、draftの件数とactive状態を本文非公開で返す
+- active personaは自動切替せず409で拒否し、明示的な切替を要求
+- inactive persona削除をAPI lock内でsessions、state/meta sidecar、session-log、対象current-session、draft、全kindのMemory、persona定義へ統合
+- 資源別結果、`deleted_count`、`ok/partial/error`、部分失敗時のretry契約により冪等再実行を可能にした
+- Studio UIはpreview件数を確認表示し、partial/error時は一覧を維持して再試行可能にした
+
+**変更ファイル**: `backend/main.py`, `frontend/js/studio.js`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: persona削除対象テスト3件成功、全回帰88件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし
