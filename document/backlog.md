@@ -19,7 +19,7 @@
 
 | 項目 | 詳細 | 参照 |
 |------|------|------|
-| 動的プラグインUI拡張 | status/separator、Studio/Settingsスロット、入力フォーム | UI基盤version 1 |
+| 動的プラグインUI拡張 | Studio/Settingsスロット、入力フォーム、status動的更新 | UI基盤version 2 |
 
 ### 3. 設計・UI改善
 

@@ -14,7 +14,10 @@ logger = logging.getLogger("rp-standalone")
 UI_SLOTS = {"chat.input_actions", "chat.toolbar"}
 UI_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 UI_DEFINITION_FIELDS = {"slot", "components"}
-UI_COMPONENT_FIELDS = {"type", "id", "label", "action", "disabled"}
+UI_BUTTON_FIELDS = {"type", "id", "label", "action", "disabled"}
+UI_SEPARATOR_FIELDS = {"type", "id"}
+UI_STATUS_FIELDS = {"type", "id", "text", "level"}
+UI_STATUS_LEVELS = {"info", "success", "warning", "error"}
 
 
 class PluginManager:
@@ -141,38 +144,65 @@ class PluginManager:
         for component in components:
             if not isinstance(component, dict):
                 return None
-            if not set(component).issubset(UI_COMPONENT_FIELDS):
-                return None
-            if not {"type", "id", "label", "action"}.issubset(component):
-                return None
-            if component.get("type") != "button":
-                return None
             component_id = component.get("id")
-            action = component.get("action")
-            label = component.get("label")
-            disabled = component.get("disabled", False)
-            if isinstance(label, str):
-                label = label.strip()
             if (
                 not isinstance(component_id, str)
                 or not UI_NAME_RE.fullmatch(component_id)
                 or component_id in ids
-                or not isinstance(action, str)
-                or not UI_NAME_RE.fullmatch(action)
-                or not isinstance(label, str)
-                or not 1 <= len(label) <= 80
-                or not isinstance(disabled, bool)
             ):
                 return None
             ids.add(component_id)
-            normalized.append({
-                "type": "button",
-                "id": component_id,
-                "label": label,
-                "action": action,
-                "disabled": disabled,
-            })
-
+            component_type = component.get("type")
+            if component_type == "button":
+                if not {"type", "id", "label", "action"}.issubset(component):
+                    return None
+                if not set(component).issubset(UI_BUTTON_FIELDS):
+                    return None
+                action = component.get("action")
+                label = component.get("label")
+                disabled = component.get("disabled", False)
+                if isinstance(label, str):
+                    label = label.strip()
+                if (
+                    not isinstance(action, str)
+                    or not UI_NAME_RE.fullmatch(action)
+                    or not isinstance(label, str)
+                    or not 1 <= len(label) <= 80
+                    or not isinstance(disabled, bool)
+                ):
+                    return None
+                normalized.append({
+                    "type": "button",
+                    "id": component_id,
+                    "label": label,
+                    "action": action,
+                    "disabled": disabled,
+                })
+            elif component_type == "separator":
+                if set(component) != UI_SEPARATOR_FIELDS:
+                    return None
+                normalized.append({"type": "separator", "id": component_id})
+            elif component_type == "status":
+                if set(component) != UI_STATUS_FIELDS:
+                    return None
+                text = component.get("text")
+                level = component.get("level")
+                if isinstance(text, str):
+                    text = text.strip()
+                if (
+                    not isinstance(text, str)
+                    or not 1 <= len(text) <= 200
+                    or level not in UI_STATUS_LEVELS
+                ):
+                    return None
+                normalized.append({
+                    "type": "status",
+                    "id": component_id,
+                    "text": text,
+                    "level": level,
+                })
+            else:
+                return None
         return {
             "name": plugin.name,
             "slot": slot,
@@ -219,7 +249,7 @@ class PluginManager:
         allowed = {
             component["action"]
             for component in definition["components"]
-            if not component["disabled"]
+            if component["type"] == "button" and not component["disabled"]
         } if definition else set()
         if action not in allowed:
             raise KeyError("plugin action not found")

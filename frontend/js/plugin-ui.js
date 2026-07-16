@@ -34,22 +34,36 @@
     feedback.classList.toggle("is-hidden", !message);
   }
 
+  const STATUS_LEVELS = Object.freeze(["info", "success", "warning", "error"]);
+
   function validComponent(component) {
     if (!component || typeof component !== "object" || Array.isArray(component)) return false;
     const keys = Object.keys(component);
-    const allowed = ["type", "id", "label", "action", "disabled"];
-    if (keys.some(key => !allowed.includes(key))) return false;
-    return component.type === "button"
-      && typeof component.id === "string"
-      && NAME_RE.test(component.id)
-      && typeof component.action === "string"
-      && NAME_RE.test(component.action)
-      && typeof component.label === "string"
-      && component.label.length >= 1
-      && component.label.length <= 80
-      && typeof component.disabled === "boolean";
+    if (typeof component.id !== "string" || !NAME_RE.test(component.id)) return false;
+    if (component.type === "button") {
+      const allowed = ["type", "id", "label", "action", "disabled"];
+      return keys.every(key => allowed.includes(key))
+        && typeof component.action === "string"
+        && NAME_RE.test(component.action)
+        && typeof component.label === "string"
+        && component.label.length >= 1
+        && component.label.length <= 80
+        && typeof component.disabled === "boolean";
+    }
+    if (component.type === "separator") {
+      return keys.length === 2
+        && keys.every(key => ["type", "id"].includes(key));
+    }
+    if (component.type === "status") {
+      return keys.length === 4
+        && keys.every(key => ["type", "id", "text", "level"].includes(key))
+        && typeof component.text === "string"
+        && component.text.length >= 1
+        && component.text.length <= 200
+        && STATUS_LEVELS.includes(component.level);
+    }
+    return false;
   }
-
   async function runAction(pluginName, component, button) {
     const initiallyDisabled = component.disabled;
     button.disabled = true;
@@ -105,6 +119,24 @@
       ids.add(component.id);
     }
     for (const component of components) {
+      if (component.type === "separator") {
+        const separator = document.createElement("span");
+        separator.className = "plugin-ui-separator";
+        separator.dataset.plugin = pluginName;
+        separator.dataset.componentId = component.id;
+        separator.setAttribute("role", "separator");
+        slot.append(separator);
+        continue;
+      }
+      if (component.type === "status") {
+        const status = document.createElement("span");
+        status.classList.add("plugin-ui-status", "plugin-ui-status-" + component.level);
+        status.dataset.plugin = pluginName;
+        status.dataset.componentId = component.id;
+        status.textContent = component.text;
+        slot.append(status);
+        continue;
+      }
       const button = document.createElement("button");
       button.type = "button";
       button.className = "plugin-ui-button";
@@ -119,7 +151,6 @@
       slot.append(button);
     }
   }
-
   async function initPluginUi() {
     const generation = ++initGeneration;
     clearPluginUi();
@@ -128,7 +159,7 @@
       if (!response.ok) throw new Error("plugin UI HTTP " + response.status);
       const payload = await response.json();
       if (generation !== initGeneration) return;
-      if (!payload || payload.version !== 1 || !Array.isArray(payload.plugins)) {
+      if (!payload || payload.version !== 2 || !Array.isArray(payload.plugins)) {
         throw new Error("invalid plugin UI payload");
       }
       for (const definition of payload.plugins) {

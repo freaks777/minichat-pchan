@@ -1089,3 +1089,15 @@ DOM挿入監査で確認したF1〜F3を修正。
 
 **変更ファイル**: `backend/plugins/base.py`, `backend/plugins/plugin_manager.py`, `backend/main.py`, `frontend/index.html`, `frontend/js/plugin-ui.js`, `frontend/js/i18n.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 **確認結果**: 回帰テスト37件成功、Python・JavaScript構文チェック成功、実ASGI応答でUI定義取得・未定義アクション・異オリジン・サイズ超過を確認、CSP禁止パターンなし、`git diff --check` 問題なし
+### 22.16 動的プラグインUI拡張 Phase 1（2026-07-16）
+
+- UIスキーマをversion 2へ更新し、既存buttonに表示専用のseparator/statusを追加
+- separatorはtype/idのみ、statusはtype/id/text/levelのみを許可する型別allowlist検証を導入
+- statusのtextを1〜200文字、levelをinfo/success/warning/errorの4値に制限
+- 表示専用コンポーネントをアクション公開対象から除外し、buttonとの混在を安全に処理
+- フロントはDOM APIとtextContentで描画し、levelを固定CSSクラスへマッピング
+- statusの動的更新、Studio/Settingsスロット、入力フォームは後続タスクとして維持
+- 正常系、型別フィールド混入、不正level、text境界、表示要素のアクション非公開を回帰テストへ追加
+
+**変更ファイル**: `backend/plugins/plugin_manager.py`, `backend/main.py`, `frontend/js/plugin-ui.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+**確認結果**: 回帰テスト39件成功、Python・JavaScript構文チェック成功、CSP禁止パターンなし、`git diff --check` 問題なし

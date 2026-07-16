@@ -204,7 +204,7 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
             {**valid, "html": "<b>x</b>"},
             self.definition("settings.plugins"),
             self.definition(components=[{
-                "type": "status", "id": "x", "label": "X", "action": "run",
+                "type": "image", "id": "x", "label": "X", "action": "run",
             }]),
             self.definition(components=[{
                 "type": "button", "id": "bad id", "label": "X", "action": "run",
@@ -224,6 +224,52 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
                     PluginManager._validate_ui_definition(plugin, definition)
                 )
 
+    def test_accepts_display_components_and_rejects_type_field_leaks(self):
+        plugin = self.plugin("demo", definition=self.definition())
+        valid = self.definition(components=[
+            {"type": "separator", "id": "split"},
+            {"type": "status", "id": "state", "text": " Ready ", "level": "success"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+
+        normalized = PluginManager._validate_ui_definition(plugin, valid)
+
+        self.assertEqual(normalized["components"], [
+            {"type": "separator", "id": "split"},
+            {"type": "status", "id": "state", "text": "Ready", "level": "success"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run", "disabled": False},
+        ])
+        boundary = self.definition(components=[
+            {"type": "status", "id": "state", "text": "x" * 200, "level": "info"},
+        ])
+        self.assertIsNotNone(PluginManager._validate_ui_definition(plugin, boundary))
+
+        invalid_components = [
+            {"type": "separator", "id": "split", "text": "leak"},
+            {"type": "status", "id": "state", "text": "Ready", "level": "debug"},
+            {"type": "status", "id": "state", "text": "", "level": "info"},
+            {"type": "status", "id": "state", "text": "x" * 201, "level": "info"},
+            {"type": "status", "id": "state", "text": "Ready", "level": "info", "action": "run"},
+        ]
+        for component in invalid_components:
+            with self.subTest(component=component):
+                self.assertIsNone(PluginManager._validate_ui_definition(
+                    plugin, self.definition(components=[component])
+                ))
+
+    async def test_display_components_do_not_expose_actions(self):
+        definition = self.definition(components=[
+            {"type": "separator", "id": "split"},
+            {"type": "status", "id": "state", "text": "Ready", "level": "info"},
+            {"type": "button", "id": "run", "label": "Run", "action": "run"},
+        ])
+        manager = self.manager([self.plugin("demo", definition=definition)])
+
+        result = await manager.dispatch_ui_action("demo", "run", {})
+
+        self.assertEqual(result["status"], "ok")
+        with self.assertRaises(KeyError):
+            await manager.dispatch_ui_action("demo", "state", {})
     async def test_dispatches_only_enabled_defined_actions(self):
         plugin = self.plugin("demo", definition=self.definition())
         manager = self.manager([plugin])
@@ -322,6 +368,9 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('data-plugin-slot="chat.input_actions"', html)
         self.assertIn('src="/frontend/js/plugin-ui.js"', html)
         self.assertIn('button.textContent = component.label', script)
+        self.assertIn('status.textContent = component.text', script)
+        self.assertIn('separator.setAttribute("role", "separator")', script)
+        self.assertIn('payload.version !== 2', script)
         self.assertIn('button.addEventListener("click"', script)
         self.assertIn("slot.replaceChildren()", script)
         self.assertIn("generation !== initGeneration", script)
