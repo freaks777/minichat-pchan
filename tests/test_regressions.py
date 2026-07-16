@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import os
@@ -1581,14 +1582,76 @@ class StateHistoryContractTests(unittest.TestCase):
         self.assertGreaterEqual(source.count('await refreshStatePanel();'), 4)
 
 class StateReliabilityContractTests(unittest.TestCase):
-    def test_state_seed_missing_retry_and_overflow_contract(self):
+    @classmethod
+    def setUpClass(cls):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
-        self.assertIn("def _seed_initial_state", source)
-        self.assertIn("開始時の状況", source)
-        self.assertIn("_state_missing_count >= 2", source)
-        self.assertIn("_state_overflow_prompt_pending", source)
-        self.assertIn("STATE update rejected", source)
-        self.assertIn('val == "[解決]"', source)
+        tree = ast.parse(source)
+        selected = []
+        names = {"_bounded_state", "_merge_state_update", "_StateTrackingStatus"}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names:
+                selected.append(node)
+        namespace = {"json": json, "MAX_STATE_LENGTH": 4096}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "state_tracking", "exec"), namespace)
+        cls.bounded_state = staticmethod(namespace["_bounded_state"])
+        cls.merge_state_update = staticmethod(namespace["_merge_state_update"])
+        cls.status_type = namespace["_StateTrackingStatus"]
+        cls.source = source
+
+    def test_state_updates_merge_and_only_explicit_resolution_deletes(self):
+        previous = {"place": "room", "restraint": "hands", "promise": "kept"}
+
+        merged = self.merge_state_update(previous, {"place": "hall"}, set())
+        self.assertEqual(
+            merged,
+            {"place": "hall", "restraint": "hands", "promise": "kept"},
+        )
+
+        resolved = self.merge_state_update(
+            merged, {"promise": "renewed"}, {"restraint"}
+        )
+        self.assertEqual(resolved, {"place": "hall", "promise": "renewed"})
+
+    def test_all_resolved_is_a_valid_empty_state(self):
+        merged = self.merge_state_update({"only": "pending"}, {}, {"only"})
+        self.assertEqual(merged, {})
+        self.assertIn(
+            "if state_update_received and not state_overflowed:", self.source
+        )
+        self.assertIn("_record_state_snapshot(state_dict)", self.source)
+
+    def test_overflow_is_rejected_without_counting_as_missing(self):
+        self.assertIsNone(self.bounded_state({"large": "x" * 5000}))
+        status = self.status_type()
+        status.note_missing_state()
+        before = status.missing_count
+        status.note_overflow()
+        self.assertEqual(status.missing_count, before)
+        self.assertTrue(status.consume_overflow_prompt())
+        self.assertFalse(status.consume_overflow_prompt())
+
+    def test_tracking_status_resets_at_session_boundaries(self):
+        status = self.status_type()
+        status.note_missing_state()
+        status.note_missing_state()
+        status.note_overflow()
+        status.reset()
+        self.assertEqual(status.missing_count, 0)
+        self.assertFalse(status.overflow_prompt_pending)
+        self.assertGreaterEqual(self.source.count("_state_tracking.reset()"), 3)
+        self.assertIn("def _restore_state_for_history", self.source)
+
+    def test_oversized_seed_is_rejected_before_both_writes(self):
+        seed_start = self.source.index("def _seed_initial_state")
+        seed_end = self.source.index("\ndef _record_state_snapshot", seed_start)
+        seed_source = self.source[seed_start:seed_end]
+        bound_pos = seed_source.index("bounded = _bounded_state(state)")
+        state_write_pos = seed_source.index("_save_session_state(bounded)")
+        snapshot_write_pos = seed_source.index("_save_state_snapshots")
+        self.assertLess(bound_pos, state_write_pos)
+        self.assertLess(bound_pos, snapshot_write_pos)
+        self.assertIn("if bounded is None:", seed_source)
+        self.assertIn("return {}", seed_source)
 
 class FrontendXssTests(unittest.TestCase):
     def test_external_values_use_dom_properties_and_listeners(self):

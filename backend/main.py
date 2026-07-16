@@ -324,8 +324,30 @@ plugin_manager = PluginManager(config["plugins"]["enabled"])
 # 同時リクエストによるデータ競合を防止（複数タブ対策）
 _api_lock = asyncio.Lock()
 _cancel_event = asyncio.Event()  # 生成中断用
-_state_missing_count = 0
-_state_overflow_prompt_pending = False
+class _StateTrackingStatus:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.missing_count = 0
+        self.overflow_prompt_pending = False
+
+    def note_valid_state(self):
+        self.missing_count = 0
+
+    def note_missing_state(self):
+        self.missing_count += 1
+
+    def note_overflow(self):
+        self.overflow_prompt_pending = True
+
+    def consume_overflow_prompt(self) -> bool:
+        pending = self.overflow_prompt_pending
+        self.overflow_prompt_pending = False
+        return pending
+
+
+_state_tracking = _StateTrackingStatus()
 
 # persona_studio にAPI設定を注入
 if plugin_manager.has("persona_studio"):
@@ -402,12 +424,10 @@ def rebuild_system_prompt():
         "常に自然言語の会話・描写のみを出力してください。"
     )})
 
-    global _state_overflow_prompt_pending
-    if _state_overflow_prompt_pending:
+    if _state_tracking.consume_overflow_prompt():
         system_messages.append({"role": "system", "content": "【状態整理】状態が上限を超えたため前回更新は保存していません。解決済み項目を [解決] で明示し、残りを簡潔に統合して有効なSTATEを出力してください。"})
-        _state_overflow_prompt_pending = False
-    if _state_missing_count >= 2:
-        system_messages.append({"role": "system", "content": "【状態追跡の再確認】前回STATEが連続して欠落しています。現在の状態を保持し、応答末尾に有効な---STATE---と少なくとも1件の - 項目名: 説明 を必ず出力してください。"})
+    if _state_tracking.missing_count >= 2:
+        system_messages.append({"role": "system", "content": "【状態追跡の再確認】前回STATEが連続して欠落しています。現在の状態を保持し、応答末尾に有効な---STATE---を必ず出力してください。未解決項目は列挙し、すべて解決済みなら各項目を [解決] で明示してください。"})
 
     # ---STATE--- 出力指示
     system_messages.append({"role": "system", "content": (
@@ -420,6 +440,8 @@ def rebuild_system_prompt():
         "- 項目名には誰の状態かを含める（例: 「対象の両手拘束」「葵依の居場所」）\n"
         "- 拘束状態・交わした約束・時間経過で変化する要素・その他忘却すべきでない情報すべてを含める\n"
         "- 値は必要な詳細を自然言語で記述\n"
+        "- 前回から変化しない項目は省略しても保持される\n"
+        "- 解決した項目だけ値を [解決] として明示する\n"
         "- 【重要】ユーザーの入力が現在の状態と矛盾する・物理的に不可能な場合、\n"
         "  それを受け入れてはいけない。状態に基づいて現実的な反応を返すこと"
     )})
@@ -517,6 +539,14 @@ def _bounded_state(state: dict) -> dict | None:
     return dict(state)
 
 
+def _merge_state_update(previous: dict, updates: dict, resolved_keys) -> dict:
+    merged = dict(previous) if isinstance(previous, dict) else {}
+    for key in resolved_keys:
+        merged.pop(key, None)
+    merged.update(updates)
+    return merged
+
+
 def _write_json_atomic(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -525,7 +555,10 @@ def _write_json_atomic(path: Path, value):
 
 
 def _save_session_state(state: dict):
-    _write_json_atomic(_state_path(), _bounded_state(state))
+    bounded = _bounded_state(state)
+    if bounded is None:
+        raise ValueError("state exceeds maximum length")
+    _write_json_atomic(_state_path(), bounded)
 
 
 def _load_state_snapshots() -> list[dict]:
@@ -536,7 +569,9 @@ def _load_state_snapshots() -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines():
             item = json.loads(line); count, state = item.get("message_count"), item.get("state")
             if type(count) is not int or count < previous or (count == previous and count != 0) or count % 2 or not isinstance(state, dict): raise ValueError()
-            snapshots.append({"message_count": count, "state": _bounded_state(state)}); previous = count
+            bounded = _bounded_state(state)
+            if bounded is None: raise ValueError()
+            snapshots.append({"message_count": count, "state": bounded}); previous = count
     except Exception:
         logger.warning("state history ignored: %s", path.name); return []
     return snapshots
@@ -562,10 +597,14 @@ def _extract_opening_seed() -> dict:
 def _seed_initial_state() -> dict:
     if _state_path().exists() or _state_history_path().exists(): return {}
     state = _extract_opening_seed()
-    if state:
-        _save_session_state(state)
-        _save_state_snapshots([{"message_count": 0, "state": state, "source": "seed"}])
-    return state
+    bounded = _bounded_state(state)
+    if bounded is None:
+        logger.warning("initial state seed rejected: exceeds %d chars", MAX_STATE_LENGTH)
+        return {}
+    if bounded:
+        _save_session_state(bounded)
+        _save_state_snapshots([{"message_count": 0, "state": bounded, "source": "seed"}])
+    return bounded
 
 
 def _record_state_snapshot(state: dict):
@@ -577,8 +616,7 @@ def _record_state_snapshot(state: dict):
 
 
 def _restore_state_for_history(message_count: int, preserve_legacy: bool = False) -> dict:
-    global _state_missing_count
-    _state_missing_count = 0
+    _state_tracking.reset()
     path = _state_history_path()
     if not path.exists() and preserve_legacy: return {}
     snapshots = [item for item in _load_state_snapshots() if item["message_count"] <= message_count]
@@ -1518,6 +1556,7 @@ async def switch_persona(req: SwitchPersonaRequest):
             validate_persona_id(persona_id)
             persona_manager.switch(persona_id)
             history.reload(persona_id)
+            _state_tracking.reset()
             rebuild_system_prompt()
             # hook: ペルソナ切替（memory等の連動切替）
             ctx = SessionContext(
@@ -1606,6 +1645,7 @@ async def start_session(req: StartSessionRequest):
         except ValueError as e:
             return {"error": str(e)}
 
+        _state_tracking.reset()
         _seed_initial_state()
         rebuild_system_prompt()
 
@@ -2436,6 +2476,8 @@ async def chat_sse(data: dict):
                 # ---STATE--- 抽出と保存
                 display_text = response_text
                 state_dict = None
+                state_update_received = False
+                state_overflowed = False
                 state_text = state_buffer.strip()
                 if state_text:
                     # 表示用テキストから ---STATE--- 以降を除去
@@ -2459,16 +2501,20 @@ async def chat_sse(data: dict):
                             state_dict[key] = val
 
                     if state_dict or resolved_keys:
-                        if resolved_keys:
-                            previous_state = json.loads(_state_path().read_text(encoding="utf-8")) if _state_path().exists() else {}
-                            for resolved_key in resolved_keys:
-                                previous_state.pop(resolved_key, None)
-                            previous_state.update(state_dict)
-                            state_dict = previous_state
+                        state_update_received = True
+                        previous_state = {}
+                        if _state_path().exists():
+                            try:
+                                loaded_state = json.loads(_state_path().read_text(encoding="utf-8"))
+                                if isinstance(loaded_state, dict):
+                                    previous_state = loaded_state
+                            except Exception:
+                                logger.warning("existing state ignored during merge: %s", _state_path().name)
+                        state_dict = _merge_state_update(previous_state, state_dict, resolved_keys)
                         state_dict = _bounded_state(state_dict)
                         if state_dict is None:
-                            global _state_overflow_prompt_pending
-                            _state_overflow_prompt_pending = True
+                            state_overflowed = True
+                            _state_tracking.note_overflow()
                             logger.warning("STATE update rejected: exceeds %d chars", MAX_STATE_LENGTH)
                         # 前回状態を読み込み
                         old_state = {}
@@ -2488,13 +2534,12 @@ async def chat_sse(data: dict):
                 # 履歴保存（---STATE--- を除いた本文のみ）
                 if history._messages and history._messages[-1]["role"] == "assistant":
                     history._messages[-1]["content"] = display_text
-                global _state_missing_count
-                if state_dict:
-                    _state_missing_count = 0
+                if state_update_received and not state_overflowed:
+                    _state_tracking.note_valid_state()
                     _record_state_snapshot(state_dict)
-                elif not was_cancelled:
-                    _state_missing_count += 1
-                    logger.warning("STATE missing consecutively: %d", _state_missing_count)
+                elif not was_cancelled and not state_overflowed:
+                    _state_tracking.note_missing_state()
+                    logger.warning("STATE missing consecutively: %d", _state_tracking.missing_count)
                 history.save_turn(force=was_cancelled)
 
                 touch_last_response()
