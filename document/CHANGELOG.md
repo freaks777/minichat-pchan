@@ -1305,3 +1305,15 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `frontend/js/studio.js`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: Persona Studio表示契約テスト2件成功、全回帰90件成功、JavaScript・Python構文チェック成功、`git diff --check` 問題なし
+
+### 22.32 チャット送信・停止UIの統一（2026-07-17）
+
+- 送信ボタンと別位置の停止ボタンを廃止し、同一のsend-btnを通常時「送信」・SSE応答中「停止」へ切替
+- 通常送信、再生成、ユーザー発言編集後送信を共通busy guardで二重送信防止し、完了・エラー・中断を共通finallyで復帰
+- 停止要求の多重送信を防ぎ、サーバー保存猶予後も上流が応答しない場合だけAbortControllerで中断
+- chat cancel eventのclearを要求開始直後へ移し、hook/context構築中に届いた停止要求がストリーム直前のclearで失われる競合を解消
+- 停止状態のsend-btnを赤色表示し、テキストとaria-labelを言語設定に沿って切替
+
+**変更ファイル**: `backend/main.py`, `frontend/index.html`, `frontend/js/chat.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: 送信・停止契約テスト3件成功、全回帰93件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし

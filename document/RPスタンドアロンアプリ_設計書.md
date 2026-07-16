@@ -222,6 +222,15 @@ async def chat_sse(request: Request):
 `core/api.py` の共有 `httpx.AsyncClient` はFastAPI lifespanで生成・終了し、OpenAI互換・Anthropic・Googleの同期／ストリーム計6経路で接続プールを再利用する。上限は20接続、KeepAliveは10接続とし、タイムアウトは従来どおり各リクエストの設定値を適用する。ストリームレスポンスは各呼出側の `async with client.stream(...)` で確実に閉じる。
 フロントは `i18n.js` の `t(code)` で言語設定に応じたメッセージに変換する。
 
+**送信・停止UI契約**:
+
+- 入力欄右端は単一の `send-btn` とし、通常時は「送信」、SSE応答中は同じ位置・同じ要素を「停止」へ切り替える。別位置の停止ボタンは置かない
+- 通常送信、再生成、ユーザー発言編集後の再送信はすべて `send()` を通り、正規化開始から応答完了までbusy guardで二重送信を拒否する
+- 応答中のsend-btnは入力・機密挿入を無効化したまま停止操作だけを受け付け、停止要求の多重送信を拒否する
+- 停止は `/api/chat/cancel` でサーバーへ通知し、部分応答を履歴へ保存する猶予後、上流が応答しない場合だけAbortControllerで接続を中断する
+- success、API error、通信error、中断のすべてを共通finallyで通常の送信状態へ戻す
+- サーバーのcancel eventはchat要求開始時に一度だけclearし、hook/context構築後にはclearしない。前処理中に届いた停止要求を失わない
+
 ### 3.3.1 PersonaManager（コア機能）
 
 ペルソナ（人格・キャラクター設定）はオプション機能ではなく、**「どの設定ファイル（SOUL.md/SKILL.md）を読み込み、どの会話履歴を使うか」を決めるコアの根幹機能**として扱う。1キャラ固定ではなく、最初から複数ペルソナの切替運用を前提とする。

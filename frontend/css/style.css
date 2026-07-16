@@ -379,6 +379,8 @@ body {
   flex-shrink: 0;
 }
 #input-area button:hover { background: var(--accent-hover); }
+#input-area #send-btn.is-stop { background: var(--error); }
+#input-area #send-btn.is-stop:hover { background: #dc2626; }
 #input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Studio layout ── */

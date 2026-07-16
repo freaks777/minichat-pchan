@@ -2584,6 +2584,7 @@ async def chat_sse(data: dict):
     """SSE ストリーミングでチャット応答を返す。"""
     await _api_lock.acquire()
     try:
+        _cancel_event.clear()  # この要求より後に届く停止要求だけを保持する
         user_text = str(data.get("text", "")).strip()
         if not user_text:
             _api_lock.release()
@@ -2652,7 +2653,6 @@ async def chat_sse(data: dict):
                 pending = ""
                 t_start = time.perf_counter()
                 model_info = {}
-                _cancel_event.clear()  # 前回のキャンセル状態をリセット
                 try:
                     async for chunk in chat_stream(context_messages, config, model_info):
                         if _cancel_event.is_set():

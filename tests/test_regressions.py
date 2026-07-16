@@ -1790,6 +1790,39 @@ class SessionListContractTests(unittest.TestCase):
         )
 
 
+class ChatSendStopTests(unittest.TestCase):
+    def test_send_button_is_the_single_send_stop_control(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        source = (ROOT / "frontend" / "js" / "chat.js").read_text(encoding="utf-8")
+        self.assertEqual(html.count('id="send-btn"'), 1)
+        self.assertNotIn('id="stop-btn"', html)
+        self.assertNotIn('getElementById("stop-btn")', source)
+        self.assertIn('streaming ? cancelChat() : send()', source)
+        self.assertIn('sendButton.textContent = active ? t("btnStop") : t("sendButton")', source)
+        self.assertIn('sendButton.classList.toggle("is-stop", active)', source)
+
+    def test_all_send_paths_share_busy_guard_and_finally_restores_composer(self):
+        source = (ROOT / "frontend" / "js" / "chat.js").read_text(encoding="utf-8")
+        self.assertIn('if (sending || streaming) return;', source)
+        self.assertIn('sending = true;', source)
+        self.assertIn('send(newContent);', source)
+        self.assertIn('send(text);', source)
+        self.assertIn('setComposerStreaming(true);', source)
+        self.assertIn('setComposerStreaming(false);', source)
+        self.assertIn('if (!controller || cancelling) return;', source)
+        self.assertIn('fetch("/api/chat/cancel", { method: "POST" })', source)
+
+    def test_chat_cancel_event_is_not_cleared_after_preprocessing(self):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        chat_start = source.index('async def chat_sse(data: dict):')
+        stream_start = source.index('async for chunk in chat_stream', chat_start)
+        chat_source = source[chat_start:stream_start]
+        clear_index = chat_source.index('_cancel_event.clear()')
+        user_hook_index = chat_source.index('plugin_manager.dispatch("on_user_message"')
+        self.assertLess(clear_index, user_hook_index)
+        self.assertEqual(chat_source.count('_cancel_event.clear()'), 1)
+
+
 class PersonaStudioSaveDisplayTests(unittest.TestCase):
     def test_save_success_keeps_results_and_actions_editable(self):
         source = (ROOT / "frontend" / "js" / "studio.js").read_text(encoding="utf-8")

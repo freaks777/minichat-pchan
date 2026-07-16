@@ -8,6 +8,8 @@ let personaName = "...";
 let activePersonaId = "";
 let activeSessionId = "";
 let streaming = false;  // SSE ストリーミング中フラグ
+let sending = false;    // 正規化から応答完了までの二重送信防止
+let cancelling = false; // 停止要求の多重送信防止
 let abortController = null;  // 中断用
 let currentState = {};   // 現在の状態
 
@@ -158,7 +160,6 @@ document.addEventListener("DOMContentLoaded", () => {
   updateLangToggle();
   i18nApply();
   document.getElementById("state-toggle-btn")?.addEventListener("click", toggleStatePanel);
-  document.getElementById("stop-btn")?.addEventListener("click", cancelChat);
 
   // 旧来のスタイル選択パネル用（セッション未開始で /chat に直接来た場合のフォールバック）
   const startBtn = document.getElementById("start-btn");
@@ -558,7 +559,7 @@ async function deleteMessage(msgDiv) {
 /* ── Send ── */
 document.addEventListener("DOMContentLoaded", () => {
   const msgInput = document.getElementById("msg-input");
-  document.getElementById("send-btn").addEventListener("click", () => send());
+  document.getElementById("send-btn").addEventListener("click", () => streaming ? cancelChat() : send());
 
   const secretDialog = document.getElementById("secret-dialog");
   const secretButton = document.getElementById("secret-btn");
@@ -620,7 +621,19 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
+function setComposerStreaming(active) {
+  const input = document.getElementById("msg-input");
+  const sendButton = document.getElementById("send-btn");
+  input.disabled = active;
+  document.getElementById("secret-btn").disabled = active;
+  sendButton.disabled = false;
+  sendButton.textContent = active ? t("btnStop") : t("sendButton");
+  sendButton.classList.toggle("is-stop", active);
+  sendButton.setAttribute("aria-label", active ? t("btnStop") : t("sendButton"));
+}
+
 async function send(textOverride) {
+  if (sending || streaming) return;
   if (typeof textOverride !== "string") textOverride = null;
   let text = textOverride || (() => {
     const input = document.getElementById("msg-input");
@@ -630,6 +643,8 @@ async function send(textOverride) {
     return t;
   })();
   if (!text) return;
+  sending = true;
+  document.getElementById("send-btn").disabled = true;
 
   try {
     const normalizedRes = await fetch("/api/secrets/normalize", {
@@ -643,6 +658,8 @@ async function send(textOverride) {
   } catch (err) {
     if (!textOverride) document.getElementById("msg-input").value = text;
     alert(t("secretNormalizeError") + ": " + err.message);
+    sending = false;
+    document.getElementById("send-btn").disabled = false;
     return;
   }
 
@@ -651,13 +668,11 @@ async function send(textOverride) {
   }
 
   const input = document.getElementById("msg-input");
-  input.disabled = true;
-  document.getElementById("send-btn").disabled = true;
-  document.getElementById("secret-btn").disabled = true;
   streaming = true;
+  cancelling = false;
+  setComposerStreaming(true);
   showTyping(true);
   document.getElementById("header-status").className = "status-dot streaming";
-  document.getElementById("stop-btn").style.display = "inline-block";
 
   // SSE ストリーミング受信
   abortController = new AbortController();
@@ -722,21 +737,24 @@ async function send(textOverride) {
     }
   }).finally(() => {
     streaming = false;
+    sending = false;
+    cancelling = false;
     abortController = null;
     currentAssistantDiv = null;
     showTyping(false);
     document.getElementById("header-status").className = "status-dot connected";
-    document.getElementById("stop-btn").style.display = "none";
-    input.disabled = false;
-    document.getElementById("send-btn").disabled = false;
-  document.getElementById("secret-btn").disabled = false;
+    setComposerStreaming(false);
     input.focus();
   });
 }
 
 async function cancelChat() {
   const controller = abortController;
-  if (!controller) return;
+  if (!controller || cancelling) return;
+  cancelling = true;
+  const sendButton = document.getElementById("send-btn");
+  sendButton.disabled = true;
+  sendButton.textContent = t("btnStop") + "...";
   try { await fetch("/api/chat/cancel", { method: "POST" }); } catch (_) {}
   // Let the server persist the partial turn; abort only if upstream stays silent.
   setTimeout(() => {
