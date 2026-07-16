@@ -429,6 +429,14 @@ def _state_path_for(persona_id: str, session_id: str) -> Path:
     return BASE_DIR.parent / "sessions" / persona_id / f"{session_id}_state.json"
 
 
+def _state_history_path_for(persona_id: str, session_id: str) -> Path:
+    return BASE_DIR.parent / "sessions" / persona_id / f"{session_id}_state_history.jsonl"
+
+
+def _state_history_path() -> Path:
+    return _state_history_path_for(persona_manager.active, history.session_id or "00000000")
+
+
 def _session_meta_path(persona_id: str, session_date: str, session_id: str) -> Path:
     """Return the persistent metadata path for one session."""
     return (
@@ -492,24 +500,65 @@ def _load_session_state() -> str:
 MAX_STATE_LENGTH = 4096
 
 
-def _save_session_state(state: dict):
-    """現在の状態を _state.json に保存（フル上書き）。"""
-    sp = _state_path()
-    sp.parent.mkdir(parents=True, exist_ok=True)
-    # LLM暴走による肥大化を防止
-    bounded_state = dict(state)
-    state_json = json.dumps(bounded_state, ensure_ascii=False, indent=2)
-    original_length = len(state_json)
-    while len(state_json) > MAX_STATE_LENGTH and bounded_state:
-        bounded_state.pop(next(reversed(bounded_state)))
-        state_json = json.dumps(bounded_state, ensure_ascii=False, indent=2)
-    if original_length > MAX_STATE_LENGTH:
-        logger.warning(
-            "state JSON too large (%d chars), reduced to %d valid chars",
-            original_length, len(state_json),
-        )
-    sp.write_text(state_json, encoding="utf-8")
+def _bounded_state(state: dict) -> dict:
+    if not isinstance(state, dict): return {}
+    bounded = dict(state)
+    while len(json.dumps(bounded, ensure_ascii=False, indent=2)) > MAX_STATE_LENGTH and bounded:
+        bounded.pop(next(reversed(bounded)))
+    return bounded
 
+
+def _write_json_atomic(path: Path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def _save_session_state(state: dict):
+    _write_json_atomic(_state_path(), _bounded_state(state))
+
+
+def _load_state_snapshots() -> list[dict]:
+    path = _state_history_path()
+    if not path.exists(): return []
+    snapshots, previous = [], 0
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            item = json.loads(line); count, state = item.get("message_count"), item.get("state")
+            if type(count) is not int or count <= previous or count % 2 or not isinstance(state, dict): raise ValueError()
+            snapshots.append({"message_count": count, "state": _bounded_state(state)}); previous = count
+    except Exception:
+        logger.warning("state history ignored: %s", path.name); return []
+    return snapshots
+
+
+def _save_state_snapshots(snapshots: list[dict]):
+    path = _state_history_path()
+    if not snapshots: path.unlink(missing_ok=True); return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in snapshots) + "\n", encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def _record_state_snapshot(state: dict):
+    count = len(history._messages)
+    if count == 0 or count % 2: return
+    snapshots = [item for item in _load_state_snapshots() if item["message_count"] < count]
+    snapshots.append({"message_count": count, "state": _bounded_state(state)})
+    _save_state_snapshots(snapshots)
+
+
+def _restore_state_for_history(message_count: int, preserve_legacy: bool = False) -> dict:
+    path = _state_history_path()
+    if not path.exists() and preserve_legacy: return {}
+    snapshots = [item for item in _load_state_snapshots() if item["message_count"] <= message_count]
+    _save_state_snapshots(snapshots)
+    state = snapshots[-1]["state"] if snapshots else {}
+    if state: _save_session_state(state)
+    else: _state_path().unlink(missing_ok=True)
+    return state
 
 def _diff_state(old: dict, new: dict) -> dict:
     """新旧状態を比較し、ステータス付きの辞書を返す。
@@ -594,6 +643,7 @@ def _activate_session(persona_id: str, session_id: str,
             {"viewpoint": "ai_character", "person": "first", "narration": True}
         )
 
+    _restore_state_for_history(len(history._messages), preserve_legacy=True)
     rebuild_system_prompt()
 
     session_state = {
@@ -1388,6 +1438,7 @@ async def delete_session(persona_id: str, date: str):
     file_path = persona_dir / f"{date}.jsonl"
     meta_path = _session_meta_path(persona_id, session_date, session_id)
     state_path = _state_path_for(persona_id, session_id)
+    state_history_path = _state_history_path_for(persona_id, session_id)
     current_path = BASE_DIR / ".current-session"
     is_current = False
 
@@ -1408,6 +1459,7 @@ async def delete_session(persona_id: str, date: str):
         file_path.unlink(missing_ok=True)
         meta_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
+        state_history_path.unlink(missing_ok=True)
         if is_current:
             current_path.unlink(missing_ok=True)
             history._messages = []
@@ -1605,7 +1657,14 @@ async def get_current_session():
 @app.get("/api/session/state")
 async def get_session_state():
     """現在のセッション状態を返す。"""
-    return {"state": json.loads(_state_path().read_text(encoding="utf-8")) if _state_path().exists() else {}}
+    path = _state_path()
+    if not path.exists():
+        return {"state": {}}
+    try:
+        return {"state": json.loads(path.read_text(encoding="utf-8"))}
+    except Exception:
+        logger.warning("state ignored: %s", path.name)
+        return {"state": {}}
 
 
 @app.get("/api/session/history")
@@ -1777,8 +1836,11 @@ async def update_message(req: UpdateMessageRequest):
         if index < 0 or index >= len(history._messages):
             return {"error": f"invalid index (0-{len(history._messages)-1})"}
         history.update_message(index, content)
+        state = {}
+        if history._messages[index].get("role") == "assistant":
+            state = _restore_state_for_history(index)
         logger.info("message updated: index=%d", index)
-        return {"status": "ok"}
+        return {"status": "ok", "state": state}
 
 
 @app.post("/api/session/delete-message")
@@ -1809,8 +1871,9 @@ async def delete_message(req: DeleteMessageRequest):
 
         del history._messages[index]
         history._save_full()
+        state = _restore_state_for_history(len(history._messages))
         logger.info("message deleted: index=%d role=%s deleted=%d", index, role, deleted)
-        return {"status": "ok", "deleted": deleted}
+        return {"status": "ok", "deleted": deleted, "state": state}
 
 
 @app.post("/api/session/truncate")
@@ -1831,8 +1894,9 @@ async def truncate_history(req: TruncateRequest):
         history._messages = history._messages[:from_index]
         history._turn_count = sum(1 for m in history._messages if m.get("role") == "user")
         history._save_full()
+        state = _restore_state_for_history(len(history._messages))
         logger.info("history truncated: from_index=%d deleted=%d", from_index, deleted)
-        return {"status": "ok", "deleted": deleted}
+        return {"status": "ok", "deleted": deleted, "state": state}
 
 
 @app.post("/api/session/opening")
@@ -2341,6 +2405,7 @@ async def chat_sse(data: dict):
 
                 # ---STATE--- 抽出と保存
                 display_text = response_text
+                state_dict = None
                 state_text = state_buffer.strip()
                 if state_text:
                     # 表示用テキストから ---STATE--- 以降を除去
@@ -2361,6 +2426,7 @@ async def chat_sse(data: dict):
                             state_dict[key] = val
 
                     if state_dict:
+                        state_dict = _bounded_state(state_dict)
                         # 前回状態を読み込み
                         old_state = {}
                         sp = _state_path()
@@ -2378,6 +2444,8 @@ async def chat_sse(data: dict):
                 # 履歴保存（---STATE--- を除いた本文のみ）
                 if history._messages and history._messages[-1]["role"] == "assistant":
                     history._messages[-1]["content"] = display_text
+                if state_dict:
+                    _record_state_snapshot(state_dict)
                 history.save_turn(force=was_cancelled)
 
                 touch_last_response()

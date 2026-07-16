@@ -1565,6 +1565,21 @@ class SecretsTests(unittest.TestCase):
         self.assertIn("content = _protect_secret_data(req.content)", source)
         self.assertNotIn("content = req.content", source)
 
+class StateHistoryContractTests(unittest.TestCase):
+    def test_state_snapshots_follow_history_edits(self):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('_state_history.jsonl', source)
+        self.assertIn('def _record_state_snapshot(state: dict)', source)
+        self.assertIn('if count == 0 or count % 2: return', source)
+        self.assertIn('if item["message_count"] <= message_count', source)
+        self.assertIn('state_history_path.unlink(missing_ok=True)', source)
+        self.assertIn('state = _restore_state_for_history(len(history._messages))', source)
+
+    def test_chat_refreshes_state_after_history_changes(self):
+        source = (ROOT / "frontend" / "js" / "chat.js").read_text(encoding="utf-8")
+        self.assertIn('async function refreshStatePanel()', source)
+        self.assertGreaterEqual(source.count('await refreshStatePanel();'), 4)
+
 class FrontendXssTests(unittest.TestCase):
     def test_external_values_use_dom_properties_and_listeners(self):
         js_dir = ROOT / "frontend" / "js"

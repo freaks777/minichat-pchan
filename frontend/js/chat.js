@@ -199,10 +199,7 @@ async function showChatUI() {
   await loadHistory();
 
   // セッション状態を読み込み（空でもパネルを表示）
-  fetch("/api/session/state")
-    .then(r => r.json())
-    .then(d => updateStatePanel(d.state || {}))
-    .catch(() => {});
+  refreshStatePanel();
 
   // 状態パネルはデフォルトで表示
   document.getElementById("state-panel").style.display = "block";
@@ -229,6 +226,15 @@ function toggleStatePanel() {
   panel.style.display = panel.style.display === "none" ? "block" : "none";
 }
 
+async function refreshStatePanel() {
+  try {
+    const response = await fetch("/api/session/state");
+    const data = await response.json();
+    updateStatePanel(data.state || {});
+  } catch (_) {
+    updateStatePanel({});
+  }
+}
 function updateStatePanel(state) {
   currentState = state || {};
   const content = document.getElementById("state-content");
@@ -468,6 +474,7 @@ async function startEdit(msgDiv) {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ from_index: idx + 1, ...sessionParams() }),
         });
+        await refreshStatePanel();
 
         // 編集後のテキストを再送信
         send(newContent);
@@ -479,6 +486,7 @@ async function startEdit(msgDiv) {
           roleEl.textContent += ` ${t('btnEdited')}`;
         }
         if (actions) actions.style.display = "";
+        await refreshStatePanel();
       }
     } catch (err) {
       alert("通信エラー: " + err.message); restore();
@@ -513,6 +521,7 @@ async function regenerate(msgDiv) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ from_index: idx + 1, ...sessionParams() }),
   });
+  await refreshStatePanel();
   send(text);
 }
 
@@ -540,6 +549,7 @@ async function deleteMessage(msgDiv) {
 
     // DOMを手動操作せず、サーバー状態から完全再構築（インデックスずれ防止）
     await loadHistory();
+    await refreshStatePanel();
   } catch (err) {
     alert("通信エラー: " + err.message);
   }

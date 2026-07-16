@@ -1244,3 +1244,9 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `.gitignore`, `backend/main.py`, `backend/plugins/plugin_manager.py`, `frontend/js/plugin-ui.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/plugin_development.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: 回帰テスト66件成功、Plugin UIテスト32件成功、ガイド・雛形テスト2件成功、Python・JavaScript構文チェック成功、`git diff --check` 問題なし
+
+### 22.27 状態履歴と編集・削除・再生成の整合性（2026-07-17）
+- 正常完了したSTATEだけを {session_id}_state_history.jsonl に会話境界ごと記録する。
+- 編集・削除・truncate・再開では、残った履歴以下で最新の状態へ復元し、後続履歴を破棄する。
+- STATEなし・中断・エラーは記録せず、状態本体・副履歴は原子的に更新する。
+- チャットUIは編集・削除・再生成後に状態APIを再読込する。
