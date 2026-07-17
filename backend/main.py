@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # .env 自動読込（カレントから親を遡って探索）
 def _find_dotenv() -> Path | None:
@@ -47,7 +47,7 @@ else:
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -944,6 +944,15 @@ class SecretRevealRequest(BaseModel):
     placeholder: str
 
 
+class MemoryDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    persona_id: str | None = None
+    session_id: str | None = None
+    ids: list[str] | None = None
+
+
 # ── REST API ─────────────────────────────────────────────────────
 
 _secret_reveal_times: deque[float] = deque()
@@ -1576,6 +1585,74 @@ async def memory_orphans():
     except Exception as e:
         logger.error("memory orphan preview failed: %s", e)
         return JSONResponse(status_code=500, content={"error": "memory_orphans_failed"})
+
+
+@app.get("/api/memory/records")
+async def memory_records():
+    """Return the metadata-only record list used as deletion preview."""
+    from fastapi.responses import JSONResponse
+    plugin = _memory_management_plugin()
+    if plugin is None:
+        return JSONResponse(status_code=503, content={"error": "memory_unavailable"})
+    try:
+        records = await plugin.preview_records(_valid_memory_sessions())
+        return {"count": len(records), "items": records}
+    except Exception as e:
+        logger.error("memory record preview failed: %s", e)
+        return JSONResponse(status_code=500, content={"error": "memory_records_failed"})
+
+
+def _validate_memory_delete(req: MemoryDeleteRequest) -> None:
+    allowed_fields = {
+        "all": set(),
+        "persona": {"persona_id"},
+        "session": {"persona_id", "session_id"},
+        "records": {"ids"},
+        "orphans": set(),
+    }
+    if req.scope not in allowed_fields:
+        raise HTTPException(status_code=422, detail="invalid_memory_delete_scope")
+    supplied = set(req.model_fields_set) - {"scope"}
+    if supplied != allowed_fields[req.scope]:
+        raise HTTPException(status_code=422, detail="invalid_memory_delete_parameters")
+    if req.scope in {"persona", "session"}:
+        if not req.persona_id:
+            raise HTTPException(status_code=422, detail="persona_id_required")
+        validate_persona_id(req.persona_id)
+    if req.scope == "session":
+        if not req.session_id or not re.fullmatch(r"\d{8}", req.session_id):
+            raise HTTPException(status_code=422, detail="invalid_session_id")
+    if req.scope == "records":
+        if not req.ids or len(req.ids) > 500:
+            raise HTTPException(status_code=422, detail="invalid_memory_record_count")
+        if any(not item.strip() or item != item.strip() or len(item) > 256 for item in req.ids) or len(set(req.ids)) != len(req.ids):
+            raise HTTPException(status_code=422, detail="invalid_memory_record_ids")
+
+
+@app.post("/api/memory/delete")
+async def memory_delete(req: MemoryDeleteRequest):
+    """Delete a validated Memory DB scope without exposing document contents."""
+    from fastapi.responses import JSONResponse
+    _validate_memory_delete(req)
+    async with _api_lock:
+        plugin = _memory_management_plugin()
+        if plugin is None:
+            return JSONResponse(status_code=503, content={"error": "memory_unavailable"})
+        try:
+            if req.scope == "all":
+                deleted = await plugin.delete_all()
+            elif req.scope == "persona":
+                deleted = await plugin.delete_persona(req.persona_id)
+            elif req.scope == "session":
+                deleted = await plugin.delete_session(req.persona_id, req.session_id)
+            elif req.scope == "records":
+                deleted = await plugin.delete_records(req.ids)
+            else:
+                deleted = await plugin.delete_orphans(_valid_memory_sessions())
+            return {"status": "ok", "scope": req.scope, "deleted_count": deleted}
+        except Exception as e:
+            logger.error("memory delete failed for scope %s: %s", req.scope, e)
+            return JSONResponse(status_code=500, content={"error": "memory_delete_failed"})
 
 
 def _delete_file_resource(path: Path) -> dict:

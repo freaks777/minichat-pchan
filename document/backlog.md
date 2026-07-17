@@ -17,15 +17,13 @@
 
 ### 2. 追加課題
 
-| 順位 | 項目 | 次の対応 |
-|-----:|------|----------|
-
-| 1 | P7 Memory DB管理画面 | 完成したP2管理APIを使い、統計、preview、全件/persona/session/個別削除、孤児管理UIを追加 |
+現在なし。
 
 P2 セッション削除とMemory DBの整合性はPhase 0〜4（一覧、schema/内部API、session削除、persona_base、persona削除）まで完了。
 P4 Persona Studio保存後の表示維持は完了。保存後も編集結果と操作領域を維持し、保存済み一覧だけを更新する。
 P5 チャット送信・停止UIは完了。単一ボタンを送信/停止で切り替え、全送信経路と停止後復帰を統一する。
 P6 Setup・Studio・状態パネルのレイアウトは完了。Setupカードを内容高へ揃え、狭幅時は1列化し、Studioの複数入力列を縦積み、Chatのヘッダー・入力欄の横切れを防止する。状態パネルは入力欄直上を維持し、最大40vhまで上方向へ拡張する。
+P7 Memory DB管理画面は完了。metadata-only統計・一覧と、選択/persona/session/孤児/全件のscope別削除をSettingsから操作できる。
 
 ### 3. 長期運用改善
 

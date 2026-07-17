@@ -1254,6 +1254,80 @@ input.invalid {
   .studio-test-input-row { padding: 8px; }
   .studio-test-message { min-width: 0; }
 }
+/* ── Memory DB manager ── */
+.memory-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.memory-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.memory-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.memory-stats strong { color: var(--text); font-size: 18px; }
+.memory-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.memory-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.memory-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.memory-table th,
+.memory-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.memory-table th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.memory-table tr:last-child td { border-bottom: 0; }
+.memory-table tr.is-orphan { background: rgba(239, 68, 68, 0.08); }
+.memory-table td small {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.memory-notice {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg);
+}
+@media (max-width: 520px) {
+  .memory-heading-row { align-items: stretch; flex-direction: column; }
+  .memory-filters { grid-template-columns: 1fr; }
+  .memory-actions .btn { flex: 1 1 140px; }
+}
 /* ── Dynamic plugin UI ── */
 .plugin-ui-slot {
   display: flex;

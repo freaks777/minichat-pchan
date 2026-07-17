@@ -1504,6 +1504,54 @@ class MemoryDeduplicationTests(unittest.IsolatedAsyncioTestCase):
         for call in collection.get.call_args_list:
             self.assertEqual(call.kwargs["include"], ["metadatas"])
 
+    async def test_record_preview_is_metadata_only_and_marks_orphans(self):
+        collection = mock.MagicMock()
+        collection.get.return_value = {
+            "ids": ["fact", "base", "old"],
+            "metadatas": [
+                {"persona_id": "p", "session_id": "gone", "kind": MEMORY_KIND_SESSION_FACT},
+                {"persona_id": "p", "kind": MEMORY_KIND_PERSONA_BASE, "source": "SOUL.md"},
+                {"persona_id": "p", "source": "legacy-source"},
+            ],
+        }
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+
+        records = await plugin.preview_records(set())
+
+        self.assertEqual(records, [
+            {"id": "fact", "kind": MEMORY_KIND_SESSION_FACT, "persona_id": "p", "session_id": "gone", "source": "", "orphan": True},
+            {"id": "base", "kind": MEMORY_KIND_PERSONA_BASE, "persona_id": "p", "session_id": "", "source": "SOUL.md", "orphan": False},
+            {"id": "old", "kind": MEMORY_KIND_LEGACY, "persona_id": "p", "session_id": "", "source": "legacy-source", "orphan": False},
+        ])
+        collection.get.assert_called_once_with(include=["metadatas"])
+
+    async def test_management_deletes_are_idempotent_and_metadata_only(self):
+        collection = mock.MagicMock()
+        collection.get.side_effect = [
+            {"ids": ["a", "b"], "metadatas": [{}, {}]},
+            {"ids": ["a", "b"], "metadatas": [{}, {}]},
+            {
+                "ids": ["valid", "orphan"],
+                "metadatas": [
+                    {"persona_id": "p", "session_id": "s1", "kind": MEMORY_KIND_SESSION_FACT},
+                    {"persona_id": "p", "session_id": "gone", "kind": MEMORY_KIND_SESSION_FACT},
+                ],
+            },
+        ]
+        plugin = MemoryPlugin()
+        plugin._collection = collection
+
+        self.assertEqual(await plugin.delete_all(), 2)
+        self.assertEqual(await plugin.delete_records(["missing"]), 0)
+        self.assertEqual(await plugin.delete_orphans({("p", "s1")}), 1)
+        self.assertEqual(collection.delete.call_args_list, [
+            mock.call(ids=["a", "b"]),
+            mock.call(ids=["orphan"]),
+        ])
+        for call in collection.get.call_args_list:
+            self.assertEqual(call.kwargs["include"], ["metadatas"])
+
     async def test_memory_queries_only_session_facts(self):
         collection = mock.MagicMock()
         collection.query.return_value = {"documents": [[]]}
@@ -1532,11 +1580,66 @@ class MemoryDeduplicationTests(unittest.IsolatedAsyncioTestCase):
             {"kind": MEMORY_KIND_SESSION_FACT},
         ]})
 
-    def test_memory_management_endpoints_are_read_only(self):
+    def test_memory_management_endpoints_keep_documents_private(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
         self.assertIn('@app.get("/api/memory/stats")', source)
+        self.assertIn("from fastapi import FastAPI, HTTPException, Request", source)
         self.assertIn('@app.get("/api/memory/orphans")', source)
-        self.assertNotIn('@app.delete("/api/memory/', source)
+        self.assertIn('@app.get("/api/memory/records")', source)
+        self.assertIn('@app.post("/api/memory/delete")', source)
+        records_start = source.index("async def memory_records")
+        records_end = source.index("\ndef _validate_memory_delete", records_start)
+        self.assertNotIn("documents", source[records_start:records_end])
+        delete_start = source.index("async def memory_delete")
+        delete_end = source.index("\ndef _delete_file_resource", delete_start)
+        self.assertIn("async with _api_lock:", source[delete_start:delete_end])
+        self.assertIn("plugin.delete_orphans(_valid_memory_sessions())", source[delete_start:delete_end])
+
+    def test_memory_delete_scope_parameters_are_strict(self):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        selected = [
+            node for node in tree.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            and node.name in {"MemoryDeleteRequest", "_validate_memory_delete"}
+        ]
+        from fastapi import HTTPException
+        from pydantic import BaseModel, ConfigDict
+        namespace = {
+            "BaseModel": BaseModel,
+            "ConfigDict": ConfigDict,
+            "HTTPException": HTTPException,
+            "re": re,
+            "validate_persona_id": lambda value: None,
+        }
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "memory_delete", "exec"), namespace)
+        request_type = namespace["MemoryDeleteRequest"]
+        validate = namespace["_validate_memory_delete"]
+
+        valid = [
+            {"scope": "all"},
+            {"scope": "persona", "persona_id": "p"},
+            {"scope": "session", "persona_id": "p", "session_id": "12345678"},
+            {"scope": "records", "ids": ["a"]},
+            {"scope": "orphans"},
+        ]
+        for payload in valid:
+            validate(request_type(**payload))
+
+        invalid = [
+            {"scope": "all", "persona_id": None},
+            {"scope": "persona"},
+            {"scope": "persona", "persona_id": "p", "ids": ["a"]},
+            {"scope": "session", "persona_id": "p", "session_id": "bad"},
+            {"scope": "records", "ids": []},
+            {"scope": "records", "ids": ["a", "a"]},
+            {"scope": "records", "ids": [" "]},
+            {"scope": "records", "ids": [str(i) for i in range(501)]},
+            {"scope": "orphans", "session_id": None},
+        ]
+        for payload in invalid:
+            with self.assertRaises(HTTPException):
+                validate(request_type(**payload))
 
     async def test_persona_base_index_is_deterministic_and_replaces_old_records(self):
         collection = mock.MagicMock()
@@ -2132,6 +2235,43 @@ class FrontendXssTests(unittest.TestCase):
                 self.assertNotIn(attribute, source)
             self.assertNotIn("<script>", source)
             self.assertNotIn(' style=', source)
+
+class MemoryManagementUiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (ROOT / "frontend" / "settings.html").read_text(encoding="utf-8")
+        cls.js = (ROOT / "frontend" / "js" / "settings.js").read_text(encoding="utf-8")
+
+    def test_settings_has_memory_management_tab_and_actions(self):
+        for fragment in (
+            'data-tab="memory"',
+            'id="tab-memory"',
+            'id="memory-stat-total"',
+            'id="memory-records-body"',
+            'id="memory-delete-selected"',
+            'id="memory-delete-persona"',
+            'id="memory-delete-session"',
+            'id="memory-delete-orphans"',
+            'id="memory-delete-all"',
+        ):
+            self.assertIn(fragment, self.html)
+
+    def test_record_rows_use_dom_apis_and_metadata_endpoints(self):
+        self.assertIn("memoryFetchJson('/api/memory/stats')", self.js)
+        self.assertIn("memoryFetchJson('/api/memory/records')", self.js)
+        self.assertIn("document.createElement('tr')", self.js)
+        self.assertIn("cell.textContent = value || '—'", self.js)
+        self.assertIn("tbody.replaceChildren()", self.js)
+        self.assertNotIn("innerHTML", self.js)
+
+    def test_delete_confirms_fresh_count_and_reloads(self):
+        start = self.js.index("async function deleteMemoryScope")
+        end = self.js.index("/* ── System Prompt", start)
+        delete_source = self.js[start:end]
+        self.assertIn("const latestStats = await memoryFetchJson('/api/memory/stats')", delete_source)
+        self.assertIn("if (!confirm(t('memoryDeleteConfirm', {target, count}))) return", delete_source)
+        self.assertIn("memoryFetchJson('/api/memory/delete'", delete_source)
+        self.assertIn("await loadMemoryDb()", delete_source)
 
 class ResponsiveLayoutTests(unittest.TestCase):
     @classmethod

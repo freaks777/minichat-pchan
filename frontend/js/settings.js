@@ -2,6 +2,10 @@
 
 let currentConfig = null;
 let originalConfig = null;
+let memoryStats = null;
+let memoryRecords = [];
+let memorySelected = new Set();
+let memoryLoading = false;
 
 /* ── Init ── */
 
@@ -30,6 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('system-prompt-textarea').addEventListener('input', onSystemPromptInput);
     document.getElementById('apply-system-prompt-btn').addEventListener('click', applySystemPrompt);
     document.getElementById('reset-all-settings-btn').addEventListener('click', resetAllSettings);
+    bindMemoryManager();
 
     // タブ切替
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -47,6 +52,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadGlobalStyle();
     loadAdvancedSettings();
     loadSystemPrompt();
+    const requestedTab = new URLSearchParams(location.search).get('tab');
+    if (requestedTab && document.getElementById(`tab-${requestedTab}`)) showTab(requestedTab);
   } catch (e) {
     console.error('Settings init error:', e);
     showToast('設定初期化エラー: ' + (e.message || e), true);
@@ -421,6 +428,239 @@ function showTab(tabId) {
 
   document.querySelector(`.tab-btn[data-tab="${tabId}"]`)?.classList.add('active');
   document.getElementById(`tab-${tabId}`)?.classList.add('active');
+  if (tabId === 'memory' && !memoryStats) loadMemoryDb();
+}
+
+/* ── Memory DB ── */
+
+function bindMemoryManager() {
+  document.getElementById('memory-refresh-btn').addEventListener('click', loadMemoryDb);
+  document.getElementById('memory-persona-filter').addEventListener('change', () => {
+    memorySelected.clear();
+    populateMemorySessionFilter();
+    renderMemoryRecords();
+  });
+  document.getElementById('memory-session-filter').addEventListener('change', () => {
+    memorySelected.clear();
+    renderMemoryRecords();
+  });
+  document.getElementById('memory-kind-filter').addEventListener('change', () => {
+    memorySelected.clear();
+    renderMemoryRecords();
+  });
+  document.getElementById('memory-select-all').addEventListener('change', event => {
+    filteredMemoryRecords().forEach(record => {
+      if (event.target.checked) memorySelected.add(record.id);
+      else memorySelected.delete(record.id);
+    });
+    renderMemoryRecords();
+  });
+  document.getElementById('memory-delete-selected').addEventListener('click', () => deleteMemoryScope('records'));
+  document.getElementById('memory-delete-persona').addEventListener('click', () => deleteMemoryScope('persona'));
+  document.getElementById('memory-delete-session').addEventListener('click', () => deleteMemoryScope('session'));
+  document.getElementById('memory-delete-orphans').addEventListener('click', () => deleteMemoryScope('orphans'));
+  document.getElementById('memory-delete-all').addEventListener('click', () => deleteMemoryScope('all'));
+}
+
+async function memoryFetchJson(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+function setMemoryBusy(busy) {
+  memoryLoading = busy;
+  document.querySelectorAll('#tab-memory button, #tab-memory select, #tab-memory input').forEach(control => {
+    control.disabled = busy;
+  });
+  if (!busy) updateMemoryActions();
+}
+
+async function loadMemoryDb() {
+  if (memoryLoading) return;
+  setMemoryBusy(true);
+  const unavailable = document.getElementById('memory-unavailable');
+  const manager = document.getElementById('memory-manager');
+  try {
+    const [stats, records] = await Promise.all([
+      memoryFetchJson('/api/memory/stats'),
+      memoryFetchJson('/api/memory/records'),
+    ]);
+    memoryStats = stats;
+    memoryRecords = Array.isArray(records.items) ? records.items : [];
+    memorySelected.clear();
+    unavailable.classList.add('is-hidden');
+    manager.classList.remove('is-hidden');
+    renderMemoryStats();
+    populateMemoryPersonaFilter();
+    populateMemorySessionFilter();
+    renderMemoryRecords();
+  } catch (err) {
+    memoryStats = null;
+    memoryRecords = [];
+    unavailable.textContent = `${t('memoryUnavailable')}: ${err.message}`;
+    unavailable.classList.remove('is-hidden');
+    manager.classList.add('is-hidden');
+  } finally {
+    setMemoryBusy(false);
+  }
+}
+
+function renderMemoryStats() {
+  const kinds = memoryStats?.by_kind || {};
+  document.getElementById('memory-stat-total').textContent = String(memoryStats?.total || 0);
+  document.getElementById('memory-stat-session').textContent = String(kinds.session_fact || 0);
+  document.getElementById('memory-stat-persona').textContent = String(kinds.persona_base || 0);
+  document.getElementById('memory-stat-legacy').textContent = String(kinds.legacy || 0);
+  document.getElementById('memory-stat-orphans').textContent = String(memoryStats?.orphan_session_facts || 0);
+}
+
+function replaceMemoryOptions(select, values, firstLabel) {
+  const current = select.value;
+  const first = document.createElement('option');
+  first.value = '';
+  first.textContent = firstLabel;
+  select.replaceChildren(first);
+  values.forEach(value => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  });
+  select.value = values.includes(current) ? current : '';
+}
+
+function populateMemoryPersonaFilter() {
+  const values = [...new Set(memoryRecords.map(record => record.persona_id).filter(Boolean))].sort();
+  replaceMemoryOptions(document.getElementById('memory-persona-filter'), values, t('memoryAllPersonas'));
+}
+
+function populateMemorySessionFilter() {
+  const persona = document.getElementById('memory-persona-filter').value;
+  const values = [...new Set(memoryRecords
+    .filter(record => !persona || record.persona_id === persona)
+    .map(record => record.session_id)
+    .filter(Boolean))].sort();
+  replaceMemoryOptions(document.getElementById('memory-session-filter'), values, t('memoryAllSessions'));
+}
+
+function filteredMemoryRecords() {
+  const persona = document.getElementById('memory-persona-filter').value;
+  const session = document.getElementById('memory-session-filter').value;
+  const kind = document.getElementById('memory-kind-filter').value;
+  return memoryRecords.filter(record =>
+    (!persona || record.persona_id === persona)
+    && (!session || record.session_id === session)
+    && (!kind || record.kind === kind)
+  );
+}
+
+function renderMemoryRecords() {
+  const tbody = document.getElementById('memory-records-body');
+  const visible = filteredMemoryRecords();
+  tbody.replaceChildren();
+  visible.forEach(record => {
+    const row = document.createElement('tr');
+    if (record.orphan) row.classList.add('is-orphan');
+    const checkCell = document.createElement('td');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = memorySelected.has(record.id);
+    checkbox.setAttribute('aria-label', `Select ${record.id}`);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) memorySelected.add(record.id);
+      else memorySelected.delete(record.id);
+      updateMemoryActions();
+    });
+    checkCell.appendChild(checkbox);
+    const addCell = value => {
+      const cell = document.createElement('td');
+      cell.textContent = value || '—';
+      row.appendChild(cell);
+    };
+    row.appendChild(checkCell);
+    addCell(record.kind);
+    addCell(record.persona_id);
+    addCell(record.session_id);
+    const sourceCell = document.createElement('td');
+    const source = document.createElement('div');
+    const id = document.createElement('small');
+    source.textContent = record.source || (record.orphan ? t('memoryOrphanLabel') : '—');
+    id.textContent = record.id;
+    id.title = record.id;
+    sourceCell.append(source, id);
+    row.appendChild(sourceCell);
+    tbody.appendChild(row);
+  });
+  const selectedVisible = visible.filter(record => memorySelected.has(record.id)).length;
+  const selectAll = document.getElementById('memory-select-all');
+  selectAll.checked = visible.length > 0 && selectedVisible === visible.length;
+  selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+  document.getElementById('memory-list-summary').textContent = t('memoryListSummary', {visible: visible.length, total: memoryRecords.length});
+  updateMemoryActions();
+}
+
+function updateMemoryActions() {
+  if (memoryLoading || !memoryStats) return;
+  const persona = document.getElementById('memory-persona-filter').value;
+  const session = document.getElementById('memory-session-filter').value;
+  const visible = filteredMemoryRecords();
+  document.getElementById('memory-delete-selected').disabled = memorySelected.size === 0;
+  document.getElementById('memory-delete-persona').disabled = !persona || !memoryRecords.some(record => record.persona_id === persona);
+  document.getElementById('memory-delete-session').disabled = !persona || !session || !memoryRecords.some(record => record.persona_id === persona && record.session_id === session);
+  document.getElementById('memory-delete-orphans').disabled = !(memoryStats.orphan_session_facts > 0);
+  document.getElementById('memory-delete-all').disabled = !(memoryStats.total > 0);
+  document.getElementById('memory-select-all').disabled = visible.length === 0;
+}
+
+async function deleteMemoryScope(scope) {
+  if (memoryLoading) return;
+  const persona = document.getElementById('memory-persona-filter').value;
+  const session = document.getElementById('memory-session-filter').value;
+  const payload = {scope};
+  let count = 0;
+  let target = scope;
+  if (scope === 'records') {
+    payload.ids = [...memorySelected];
+    count = payload.ids.length;
+    target = t('memorySelectedRecords');
+  } else if (scope === 'persona') {
+    payload.persona_id = persona;
+    count = memoryRecords.filter(record => record.persona_id === persona).length;
+    target = `persona ${persona}`;
+  } else if (scope === 'session') {
+    payload.persona_id = persona;
+    payload.session_id = session;
+    count = memoryRecords.filter(record => record.persona_id === persona && record.session_id === session && record.kind === 'session_fact').length;
+    target = `session ${persona}/${session}`;
+  } else {
+    try {
+      const latestStats = await memoryFetchJson('/api/memory/stats');
+      count = scope === 'all' ? latestStats.total : latestStats.orphan_session_facts;
+      target = scope === 'all' ? t('memoryAllRecords') : t('memoryOrphanRecords');
+    } catch (err) {
+      showToast(`${t('memoryDeleteFailed')}: ${err.message}`, true);
+      return;
+    }
+  }
+  if (!count) return;
+  if (!confirm(t('memoryDeleteConfirm', {target, count}))) return;
+  setMemoryBusy(true);
+  try {
+    const result = await memoryFetchJson('/api/memory/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    showToast(t('memoryDeleted', {count: result.deleted_count}));
+    memoryStats = null;
+  } catch (err) {
+    showToast(`${t('memoryDeleteFailed')}: ${err.message}`, true);
+  } finally {
+    setMemoryBusy(false);
+  }
+  await loadMemoryDb();
 }
 
 /* ── System Prompt ── */
@@ -565,6 +805,29 @@ Object.assign(I18N.ja, {
     chainSaveFailed: '保存失敗',
     secSystemPrompt: 'システムプロンプト（共通指示）',
     hintSystemPrompt: '全モデル・全ペルソナの応答に適用される共通指示です。推奨は1500文字以内（長すぎると会話履歴が圧迫されます）。',
+    tabMemory: 'Memory DB',
+    secMemoryDb: 'Memory DB 管理',
+    hintMemoryDb: '本文やembeddingは表示せず、metadataだけを管理します。',
+    btnRefresh: '再読込',
+    memoryTotal: '全件',
+    memoryOrphans: '孤児',
+    memoryAllPersonas: '全persona',
+    memoryAllSessions: '全session',
+    memoryAllKinds: '全kind',
+    memoryDeleteSelected: '選択削除',
+    memoryDeletePersona: 'persona全削除',
+    memoryDeleteSession: 'session全削除',
+    memoryDeleteOrphans: '孤児全削除',
+    memoryDeleteAll: '全件削除',
+    memoryUnavailable: 'Memory DBを利用できません',
+    memoryOrphanLabel: '孤児session_fact',
+    memoryListSummary: '{total}件中 {visible}件を表示',
+    memorySelectedRecords: '選択record',
+    memoryAllRecords: 'Memory DB 全record',
+    memoryOrphanRecords: '孤児record',
+    memoryDeleteConfirm: '{target} {count}件を削除しますか？',
+    memoryDeleted: '{count}件を削除しました',
+    memoryDeleteFailed: '削除失敗',
 });
 Object.assign(I18N.en, {
     langToggle: '日本語',
@@ -645,6 +908,29 @@ Object.assign(I18N.en, {
     chainSaveFailed: 'Save failed',
     secSystemPrompt: 'System Prompt (Global Instruction)',
     hintSystemPrompt: 'A common instruction applied to all model responses across all personas. Recommended within 1500 chars (longer prompts reduce available context).',
+    tabMemory: 'Memory DB',
+    secMemoryDb: 'Memory DB Management',
+    hintMemoryDb: 'Manage metadata only; documents and embeddings are never displayed.',
+    btnRefresh: 'Refresh',
+    memoryTotal: 'Total',
+    memoryOrphans: 'Orphans',
+    memoryAllPersonas: 'All personas',
+    memoryAllSessions: 'All sessions',
+    memoryAllKinds: 'All kinds',
+    memoryDeleteSelected: 'Delete selected',
+    memoryDeletePersona: 'Delete persona records',
+    memoryDeleteSession: 'Delete session records',
+    memoryDeleteOrphans: 'Delete all orphans',
+    memoryDeleteAll: 'Delete all records',
+    memoryUnavailable: 'Memory DB is unavailable',
+    memoryOrphanLabel: 'Orphan session_fact',
+    memoryListSummary: 'Showing {visible} of {total}',
+    memorySelectedRecords: 'selected records',
+    memoryAllRecords: 'all Memory DB records',
+    memoryOrphanRecords: 'orphan records',
+    memoryDeleteConfirm: 'Delete {count} {target}?',
+    memoryDeleted: 'Deleted {count} records',
+    memoryDeleteFailed: 'Delete failed',
 });
 
 /* ── enhanced t() with vars support (override i18n.js) ── */

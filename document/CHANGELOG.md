@@ -1329,3 +1329,17 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: レスポンシブ契約テスト3件成功、全回帰96件成功、500px実画面確認、Python構文チェック成功、`git diff --check` 問題なし
+### 22.34 P7 Memory DB管理画面（2026-07-17）
+
+- metadata-onlyの `GET /api/memory/records` を追加し、id/kind/persona/session/source/orphanだけを返却。documentとembeddingは取得・公開しない
+- `POST /api/memory/delete` を追加し、all/persona/session/records/orphansの5 scopeを単一契約で管理
+- scope別の必須・禁止引数を厳密検証し、recordsは1〜500件・重複なし、session IDは8桁を要求
+- 削除はAPI lock内で実行し、孤児は実行時点の正本session一覧から再判定。0件の再実行も成功する冪等契約
+- SettingsへMemory DBタブを追加し、kind別・persona別・孤児統計、metadata一覧、persona/session/kind filterを表示
+- 選択/persona/session/孤児/全件削除は対象件数をconfirmへ明示し、実行中無効化と完了後再読込を統一
+- record表はcreateElement/textContent/replaceChildren/addEventListenerだけで構築し、CSP/XSS契約を維持
+- 900px/500px実画面と、空の実ChromaDBに対するstats/records/全件削除、不正引数422を確認
+
+**変更ファイル**: `backend/main.py`, `backend/plugins/memory/plugin.py`, `frontend/settings.html`, `frontend/js/settings.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: Memory管理対象テスト19件成功、全回帰102件成功、Python・JavaScript構文チェック成功、実APIでstats/records/冪等全件削除・不正引数422を確認、900px/500px実画面確認、git diff --check 問題なし

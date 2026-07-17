@@ -387,8 +387,54 @@ class MemoryPlugin(PluginBase):
                 })
         return orphans
 
+    async def preview_records(self, valid_sessions: set[tuple[str, str]]) -> list[dict]:
+        """Return a metadata-only management view; never request documents or embeddings."""
+        ids, metadatas = await self._matching_records()
+        records = []
+        for memory_id, metadata in zip(ids, metadatas):
+            metadata = metadata if isinstance(metadata, dict) else {}
+            kind = metadata.get("kind")
+            if kind not in (MEMORY_KIND_SESSION_FACT, MEMORY_KIND_PERSONA_BASE):
+                kind = MEMORY_KIND_LEGACY
+            persona_id = str(metadata.get("persona_id", ""))
+            session_id = str(metadata.get("session_id", ""))
+            orphan = (
+                kind == MEMORY_KIND_SESSION_FACT
+                and (not persona_id or not session_id or (persona_id, session_id) not in valid_sessions)
+            )
+            records.append({
+                "id": str(memory_id),
+                "kind": kind,
+                "persona_id": persona_id,
+                "session_id": session_id,
+                "source": str(metadata.get("source", "")),
+                "orphan": orphan,
+            })
+        return records
+
     async def _delete_where(self, where: dict) -> int:
         ids, _ = await self._matching_records(where)
+        if ids:
+            await asyncio.to_thread(self._collection.delete, ids=ids)
+        return len(ids)
+
+    async def delete_all(self) -> int:
+        ids, _ = await self._matching_records()
+        if ids:
+            await asyncio.to_thread(self._collection.delete, ids=ids)
+        return len(ids)
+
+    async def delete_records(self, requested_ids: list[str]) -> int:
+        existing_ids, _ = await self._matching_records()
+        requested = set(requested_ids)
+        matched = [memory_id for memory_id in existing_ids if memory_id in requested]
+        if matched:
+            await asyncio.to_thread(self._collection.delete, ids=matched)
+        return len(matched)
+
+    async def delete_orphans(self, valid_sessions: set[tuple[str, str]]) -> int:
+        orphans = await self.preview_orphans(valid_sessions)
+        ids = [item["id"] for item in orphans]
         if ids:
             await asyncio.to_thread(self._collection.delete, ids=ids)
         return len(ids)

@@ -31,6 +31,7 @@
     <button class="tab-btn" data-tab="extraction" data-i18n="tabExtraction">抽出タスク用モデル</button>
     <button class="tab-btn" data-tab="watchdog" data-i18n="tabWatchdog">Watchdog</button>
     <button class="tab-btn" data-tab="style" data-i18n="tabStyle">文体 / スタイル</button>
+    <button class="tab-btn" data-tab="memory" data-i18n="tabMemory">Memory DB</button>
     <button class="tab-btn" data-tab="advanced" data-i18n="tabAdvanced">詳細</button>
   </div>
 
@@ -158,6 +159,52 @@
     </section>
   </div>
 
+  <!-- Tab: Memory DB -->
+  <div id="tab-memory" class="tab-panel">
+    <section class="settings-section">
+      <div class="memory-heading-row">
+        <div>
+          <h2 data-i18n="secMemoryDb">Memory DB 管理</h2>
+          <p class="setting-hint" data-i18n="hintMemoryDb">本文やembeddingは表示せず、metadataだけを管理します。</p>
+        </div>
+        <button id="memory-refresh-btn" class="btn btn-secondary btn-sm" data-i18n="btnRefresh">再読込</button>
+      </div>
+      <div id="memory-unavailable" class="memory-notice is-hidden" role="status"></div>
+      <div id="memory-manager">
+        <div class="memory-stats" aria-live="polite">
+          <div><span data-i18n="memoryTotal">全件</span><strong id="memory-stat-total">0</strong></div>
+          <div><span>session_fact</span><strong id="memory-stat-session">0</strong></div>
+          <div><span>persona_base</span><strong id="memory-stat-persona">0</strong></div>
+          <div><span>legacy</span><strong id="memory-stat-legacy">0</strong></div>
+          <div><span data-i18n="memoryOrphans">孤児</span><strong id="memory-stat-orphans">0</strong></div>
+        </div>
+        <div class="memory-filters">
+          <select id="memory-persona-filter" aria-label="Persona filter"><option value="" data-i18n="memoryAllPersonas">全persona</option></select>
+          <select id="memory-session-filter" aria-label="Session filter"><option value="" data-i18n="memoryAllSessions">全session</option></select>
+          <select id="memory-kind-filter" aria-label="Kind filter">
+            <option value="" data-i18n="memoryAllKinds">全kind</option>
+            <option value="session_fact">session_fact</option>
+            <option value="persona_base">persona_base</option>
+            <option value="legacy">legacy</option>
+          </select>
+        </div>
+        <div class="memory-table-wrap">
+          <table class="memory-table">
+            <thead><tr><th><input id="memory-select-all" type="checkbox" aria-label="Select visible records"></th><th>kind</th><th>persona</th><th>session</th><th>source / id</th></tr></thead>
+            <tbody id="memory-records-body"></tbody>
+          </table>
+        </div>
+        <p id="memory-list-summary" class="setting-hint"></p>
+        <div class="memory-actions">
+          <button id="memory-delete-selected" class="btn btn-danger" disabled data-i18n="memoryDeleteSelected">選択削除</button>
+          <button id="memory-delete-persona" class="btn btn-danger" disabled data-i18n="memoryDeletePersona">persona全削除</button>
+          <button id="memory-delete-session" class="btn btn-danger" disabled data-i18n="memoryDeleteSession">session全削除</button>
+          <button id="memory-delete-orphans" class="btn btn-danger" disabled data-i18n="memoryDeleteOrphans">孤児全削除</button>
+          <button id="memory-delete-all" class="btn btn-danger" disabled data-i18n="memoryDeleteAll">全件削除</button>
+        </div>
+      </div>
+    </section>
+  </div>
   <!-- Tab: Advanced -->
   <div id="tab-advanced" class="tab-panel">
     <section class="settings-section">

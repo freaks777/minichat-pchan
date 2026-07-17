@@ -772,6 +772,8 @@ watchdog:
 - persona基本情報: `SOUL.md` / `SKILL.md` / `style.yaml` がすべて揃った保存・更新・import完了後に、追加LLM呼び出しなしで3文書を索引化する。3ファイルが正本であり、ChromaDBは再生成可能な派生索引とする
 - persona索引ID: `persona_id`・`kind=persona_base`・source・NFKC/改行正規化済み内容のSHA-256。3ファイル全体の `source_hash` と短縮revisionをmetadataへ保存し、更新時は同一personaの旧 `persona_base` を置換する
 - 障害境界: Memory未設定、不完全persona、embedding/ChromaDB障害でもpersona本体の保存/importは成功させ、`warning.resource=persona_base` と再構築可能フラグを返す。`POST /api/memory/personas/{persona_id}/rebuild` で確定ファイルから再構築できる
+- 管理API: `GET /api/memory/stats`、`GET /api/memory/orphans`、`GET /api/memory/records` はdocument/embeddingを返さずmetadataだけを扱う。`POST /api/memory/delete` は `all` / `persona` / `session` / `records` / `orphans` scopeを厳密検証し、API lock内で削除する
+- 管理画面: SettingsのMemory DBタブでkind/persona/session/孤児統計、metadata一覧・filter、選択/persona/session/孤児/全件削除を提供する。削除前に対象件数を確認し、完了後は統計と一覧を再読込する
 - 設定: `config.yaml` の `chroma` セクション（`path`, `embedding_model`, `embedding_cache`）
 
 ```yaml
