@@ -21,12 +21,13 @@ import time
 import traceback
 import asyncio
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # .env 自動読込（カレントから親を遡って探索）
 def _find_dotenv() -> Path | None:
@@ -199,6 +200,9 @@ CSP_POLICY = (
     "report-uri /api/csp-report"
 )
 _CSP_REPORT_LIMIT = 500
+_CHAT_BODY_MAX_BYTES = 16_384
+_CHAT_TEXT_MAX_CHARS = 8_000
+_UNSAFE_API_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _csp_report_seen: set[tuple[str, str, str, int]] = set()
 
 
@@ -207,6 +211,43 @@ async def add_csp_header(request: Request, call_next):
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = CSP_POLICY
     return response
+
+
+@app.middleware("http")
+async def guard_api_requests(request: Request, call_next):
+    """Apply one same-origin policy to every unsafe API request."""
+    from fastapi.responses import JSONResponse
+
+    if request.url.path.startswith("/api/") and request.method in _UNSAFE_API_METHODS:
+        if not _same_origin(request):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "cross_origin_forbidden"},
+                headers=_no_store_headers(),
+            )
+
+    if request.method == "POST" and request.url.path == "/api/chat":
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                parsed_length = int(content_length)
+                if parsed_length < 0 or parsed_length > _CHAT_BODY_MAX_BYTES:
+                    raise ValueError
+            except ValueError:
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "payload_too_large"},
+                    headers=_no_store_headers(),
+                )
+        body = await request.body()
+        if len(body) > _CHAT_BODY_MAX_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "payload_too_large"},
+                headers=_no_store_headers(),
+            )
+
+    return await call_next(request)
 
 
 def _csp_safe_uri(value: object) -> str:
@@ -681,13 +722,17 @@ def _activate_session(persona_id: str, session_id: str,
                       jsonl_path: Path | None = None,
                       session_date: str = "",
                       memory_scope: str | None = None,
-                      style_override: dict | None = None):
-    """ペルソナ切替 + 履歴ロード + スタイルロック + システムプロンプト再構築 + 状態保存。"""
+                      style_override: dict | None = None,
+                      preloaded_messages: list[dict] | None = None):
+    """ペルソナ切替 + 検証済み履歴適用 + スタイルロック + 状態保存。"""
     persona_manager.switch(persona_id)
     history.reload(persona_id)
 
     if jsonl_path and jsonl_path.exists():
-        history._load_specific(jsonl_path)
+        messages = preloaded_messages
+        if messages is None:
+            messages = History.read_specific(jsonl_path)
+        history.load_messages(messages)
     else:
         history._messages = []
         history._turn_count = 0
@@ -925,10 +970,38 @@ class SwitchPersonaRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     text: str
     persona_id: str = ""
     session_id: str = ""
     resend: bool = False
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("empty_message")
+        if len(value) > _CHAT_TEXT_MAX_CHARS:
+            raise ValueError("message_too_long")
+        return value
+
+    @field_validator("persona_id")
+    @classmethod
+    def validate_chat_persona_id(cls, value: str) -> str:
+        value = value.strip()
+        if value:
+            validate_persona_id(value)
+        return value
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_chat_session_id(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"(?:\d{4}-\d{2}-\d{2}_)?\d{8}", value):
+            raise ValueError("invalid_session_id")
+        return value
 
 
 class SecretRegisterRequest(BaseModel):
@@ -988,14 +1061,45 @@ def _no_store_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
+def _normalized_port(scheme: str, port: int | None) -> int | None:
+    if port is not None:
+        return port
+    return 443 if scheme == "https" else 80 if scheme == "http" else None
+
+
 def _same_origin(request: Request) -> bool:
+    """Allow loopback same-origin browsers and header-less local clients only."""
+    host = request.headers.get("host", "")
+    try:
+        requested = urlparse(f"{request.url.scheme}://{host}")
+        requested_host = (requested.hostname or "").lower()
+        requested_port = _normalized_port(request.url.scheme, requested.port)
+    except ValueError:
+        return False
+    if requested_host not in {"127.0.0.1", "localhost", "::1"}:
+        return False
+
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site == "cross-site":
+        return False
+
     origin = request.headers.get("origin", "")
     if not origin:
-        return True
-    parsed = urlparse(origin)
+        return not fetch_site or fetch_site in {"same-origin", "same-site", "none"}
+    try:
+        parsed = urlparse(origin)
+        origin_host = (parsed.hostname or "").lower()
+        origin_port = _normalized_port(parsed.scheme, parsed.port)
+    except ValueError:
+        return False
     return (
-        parsed.scheme == request.url.scheme
-        and parsed.netloc == request.headers.get("host", "")
+        parsed.scheme in {"http", "https"}
+        and parsed.username is None
+        and parsed.password is None
+        and origin_host == requested_host
+        and origin_host in {"127.0.0.1", "localhost", "::1"}
+        and origin_port == requested_port
+        and parsed.scheme == request.url.scheme
     )
 
 
@@ -1014,13 +1118,6 @@ async def get_plugin_ui():
 @app.post("/api/plugins/{plugin_name}/actions/{action}")
 async def run_plugin_ui_action(plugin_name: str, action: str, request: Request):
     from fastapi.responses import JSONResponse
-
-    if not _same_origin(request):
-        return JSONResponse(
-            status_code=403,
-            content={"status": "error", "message": "forbidden", "data": {}},
-            headers=_no_store_headers(),
-        )
 
     content_length = request.headers.get("content-length")
     if content_length:
@@ -1094,12 +1191,10 @@ async def secrets_status():
 
 
 @app.post("/api/secrets/register")
-async def register_secret(req: SecretRegisterRequest, request: Request):
+async def register_secret(req: SecretRegisterRequest):
     from fastapi.responses import JSONResponse
     plugin = _secrets_plugin()
     value, label = req.value, req.label.strip()
-    if not _same_origin(request):
-        return JSONResponse(status_code=403, content={"error": "forbidden"}, headers=_no_store_headers())
     if plugin is None:
         return JSONResponse(status_code=404, content={"error": "secrets_unavailable"}, headers=_no_store_headers())
     if not value.strip() or len(value) > 10000 or len(label) > 100:
@@ -1109,11 +1204,9 @@ async def register_secret(req: SecretRegisterRequest, request: Request):
 
 
 @app.post("/api/secrets/normalize")
-async def normalize_secret_text(req: SecretNormalizeRequest, request: Request):
+async def normalize_secret_text(req: SecretNormalizeRequest):
     from fastapi.responses import JSONResponse
     plugin = _secrets_plugin()
-    if not _same_origin(request):
-        return JSONResponse(status_code=403, content={"error": "forbidden"}, headers=_no_store_headers())
     if len(req.text) > 100000:
         return JSONResponse(status_code=422, content={"error": "invalid_secret_text"}, headers=_no_store_headers())
     text = plugin.protect_text(req.text) if plugin else req.text
@@ -1121,10 +1214,8 @@ async def normalize_secret_text(req: SecretNormalizeRequest, request: Request):
 
 
 @app.post("/api/secrets/reveal")
-async def reveal_secret(req: SecretRevealRequest, request: Request):
+async def reveal_secret(req: SecretRevealRequest):
     from fastapi.responses import JSONResponse
-    if not _same_origin(request):
-        return JSONResponse(status_code=403, content={"error": "forbidden"}, headers=_no_store_headers())
     now = time.monotonic()
     while _secret_reveal_times and now - _secret_reveal_times[0] > 60:
         _secret_reveal_times.popleft()
@@ -1988,10 +2079,24 @@ async def get_session_state():
 
 @app.get("/api/session/history")
 async def get_history(persona_id: str = "", session_id: str = ""):
-    """現在の履歴メッセージを返す。persona_id指定時は自動復元。"""
-    err = await _auto_resume_session(persona_id, session_id)
-    if err:
-        return {"error": err, "messages": []}
+    """Return current history without changing the active session."""
+    from fastapi.responses import JSONResponse
+
+    if persona_id:
+        try:
+            validate_persona_id(persona_id)
+        except ValueError as e:
+            return JSONResponse(status_code=422, content={"error": str(e), "messages": []})
+        if session_id and not re.fullmatch(r"(?:\d{4}-\d{2}-\d{2}_)?\d{8}", session_id):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_session_id", "messages": []},
+            )
+        if not _active_session_matches(persona_id, session_id):
+            return JSONResponse(
+                status_code=409,
+                content={"error": "session_mismatch", "messages": []},
+            )
     return {
         "messages": [
             {"role": m["role"], "content": m["content"]}
@@ -2000,70 +2105,119 @@ async def get_history(persona_id: str = "", session_id: str = ""):
     }
 
 
-async def _auto_resume_session(persona_id: str, session_id: str = "") -> str | None:
-    """persona_id がサーバー側の active と異なる場合、自動でセッションを復元する。
+@dataclass(frozen=True)
+class _ResolvedSessionTarget:
+    persona_id: str
+    session_id: str
+    session_date: str
+    jsonl_path: Path | None
+    messages: list[dict]
 
-    Returns:
-        エラーメッセージ（文字列）。成功時は None。
-    """
+
+def _active_session_matches(persona_id: str, session_id: str = "") -> bool:
+    if persona_id != persona_manager.active:
+        return False
+    if not session_id:
+        return True
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", session_id):
+        expected_date, expected_sid = session_id.split("_", 1)
+    elif re.fullmatch(r"\d{8}", session_id):
+        expected_date, expected_sid = "", session_id
+    else:
+        return False
+    return (
+        expected_sid == history.session_id
+        and (not expected_date or expected_date == getattr(history, "_session_date", ""))
+    )
+
+
+def _resolve_session_target(
+    persona_id: str,
+    session_id: str = "",
+    *,
+    allow_new: bool = True,
+) -> _ResolvedSessionTarget:
+    """Resolve and preflight a target without changing runtime or files."""
+    validate_persona_id(persona_id)
+    if not (PERSONAS_DIR / persona_id).is_dir():
+        raise ValueError(f"persona not found: {persona_id}")
+
+    if not session_id:
+        if not allow_new:
+            raise ValueError("session_id required")
+        new_sid = time.strftime("%H%M%S") + str(__import__("random").randint(10, 99))
+        return _ResolvedSessionTarget(
+            persona_id=persona_id,
+            session_id=new_sid,
+            session_date=time.strftime("%Y-%m-%d"),
+            jsonl_path=None,
+            messages=[],
+        )
+
+    persona_dir = BASE_DIR.parent / "sessions" / persona_id
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", session_id):
+        session_date, resolved_sid = session_id.split("_", 1)
+        jsonl_path = persona_dir / f"{session_id}.jsonl"
+        if not jsonl_path.is_file():
+            raise ValueError(f"session not found: {persona_id}/{session_id}")
+    elif re.fullmatch(r"\d{8}", session_id):
+        matches = sorted(
+            path for path in persona_dir.glob(f"*_{session_id}.jsonl")
+            if path.is_file()
+        )
+        if len(matches) != 1:
+            raise ValueError(f"session not found or ambiguous: {session_id}")
+        jsonl_path = matches[0]
+        session_date, resolved_sid = jsonl_path.stem.split("_", 1)
+    else:
+        raise ValueError(f"invalid session_id format: {session_id}")
+
+    messages = History.read_specific(jsonl_path)
+    return _ResolvedSessionTarget(
+        persona_id=persona_id,
+        session_id=resolved_sid,
+        session_date=session_date,
+        jsonl_path=jsonl_path,
+        messages=messages,
+    )
+
+
+async def _auto_resume_session(persona_id: str, session_id: str = "") -> str | None:
+    """Resolve completely before ending or changing the active session."""
     if not persona_id:
-        return None  # 一致または空 → 何もしない
-    if persona_id == persona_manager.active and not session_id:
+        return None
+    if _active_session_matches(persona_id, session_id):
         return None
 
-    # persona_id のバリデーション（パストラバーサル防止、防御的）
     try:
-        validate_persona_id(persona_id)
-    except ValueError as e:
+        target = _resolve_session_target(persona_id, session_id)
+    except Exception as e:
         return str(e)
 
-    # session_id のバリデーション（パストラバーサル防止）
-    expected_date = ""
-    expected_sid = ""
-    if session_id:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", session_id):
-            expected_date, expected_sid = session_id.split("_", 1)
-        elif re.fullmatch(r"\d{8}", session_id):
-            expected_sid = session_id
-        else:
-            return f"invalid session_id format: {session_id}"
-
-    current_date = getattr(history, "_session_date", "")
-    if (persona_id == persona_manager.active and expected_sid == history.session_id
-            and (not expected_date or expected_date == current_date)):
-        return None
-
     logger.info(
-        "auto-resume: persona mismatch frontend=%s server=%s",
-        persona_id, persona_manager.active,
+        "auto-resume: session mismatch frontend=%s/%s server=%s/%s",
+        persona_id, session_id, persona_manager.active, history.session_id,
     )
     try:
-        # 前のセッションを終了（session_log + memory の事実抽出）
         await _dispatch_session_end_for_active()
-
-        # 履歴のロードまたは初期化
-        if session_id:
-            # session_id は "YYYY-MM-DD_HHMMSSRR" 形式
-            persona_dir = BASE_DIR.parent / "sessions" / persona_id
-            if expected_date:
-                jsonl_path = persona_dir / f"{expected_date}_{expected_sid}.jsonl"
-            else:
-                matches = sorted(persona_dir.glob(f"*_{expected_sid}.jsonl"))
-                if len(matches) != 1:
-                    return f"session not found or ambiguous: {session_id}"
-                jsonl_path = matches[0]
-                expected_date = jsonl_path.stem.split("_", 1)[0]
-            if not jsonl_path.exists():
-                return f"session not found: {persona_id}/{session_id}"
-            _activate_session(
-                persona_id, expected_sid, jsonl_path,
-                session_date=expected_date,
-            )
-        else:
-            jsonl_path = None
-            ssid = time.strftime("%H%M%S") + str(__import__("random").randint(10, 99))
-            _activate_session(persona_id, ssid, jsonl_path)
-        logger.info("auto-resume: success persona=%s session=%s", persona_id, history.session_id)
+        _activate_session(
+            target.persona_id,
+            target.session_id,
+            target.jsonl_path,
+            session_date=target.session_date,
+            preloaded_messages=target.messages,
+        )
+        ctx = SessionContext(
+            persona_id=target.persona_id,
+            style=persona_manager.get_active_style() or {},
+            history=history,
+            memory_scope=_get_current_memory_scope(),
+        )
+        await plugin_manager.dispatch("on_session_start", ctx)
+        logger.info(
+            "auto-resume: success persona=%s session=%s",
+            target.persona_id, target.session_id,
+        )
         return None
     except Exception as e:
         logger.error("auto-resume failed: %s", e)
@@ -2073,72 +2227,64 @@ async def _auto_resume_session(persona_id: str, session_id: str = "") -> str | N
 @app.post("/api/session/resume")
 async def resume_session(req: ResumeSessionRequest):
     async with _api_lock:
-        """既存セッションを再開する。
-
-        Body: {"session_id": "kyouka-detective/2026-07-06_HHMMSSRR"}
-        """
+        """Resume an existing, fully preflighted session."""
         raw_id = req.session_id.strip()
         if not raw_id or "/" not in raw_id:
             return {"error": "invalid session_id (format: persona_id/YYYY-MM-DD_HHMMSSRR)"}
 
         persona_id, file_stem = raw_id.split("/", 1)
-        try:
-            validate_persona_id(persona_id)
-        except ValueError as e:
-            return {"error": str(e)}
-
-        # ファイル名は常に YYYY-MM-DD_HHMMSSRR 形式
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", file_stem):
             return {"error": "invalid session_id format (YYYY-MM-DD_HHMMSSRR required)"}
-        session_id = file_stem.split("_", 1)[1]
-        session_date = file_stem.split("_")[0]
-
-        jsonl_path = BASE_DIR.parent / "sessions" / persona_id / f"{file_stem}.jsonl"
-        if not jsonl_path.exists():
-            return {"error": f"session not found: {raw_id}"}
-
-        # End the previous session only after the requested session is validated.
-        if (persona_manager.active and
-                (persona_manager.active != persona_id or history.session_id != session_id
-                 or getattr(history, "_session_date", "") != session_date)):
-            await _dispatch_session_end_for_active()
         try:
-            _activate_session(
-                persona_id, session_id, jsonl_path, session_date=session_date)
+            target = _resolve_session_target(persona_id, file_stem, allow_new=False)
         except Exception as e:
             return {"error": str(e)}
 
-        if jsonl_path.exists():
-            logger.info("resume: loaded history from %s (%d messages)",
-                         jsonl_path.name, len(history._messages))
-        else:
-            logger.info("resume: new session (no existing file)")
+        if not _active_session_matches(target.persona_id, file_stem):
+            await _dispatch_session_end_for_active()
+        try:
+            _activate_session(
+                target.persona_id,
+                target.session_id,
+                target.jsonl_path,
+                session_date=target.session_date,
+                preloaded_messages=target.messages,
+            )
+        except Exception as e:
+            return {"error": str(e)}
 
-        # resumed_from を追記
+        logger.info(
+            "resume: loaded history from %s (%d messages)",
+            target.jsonl_path.name, len(history._messages),
+        )
+
         current_path = BASE_DIR / ".current-session"
         if current_path.exists():
             try:
                 state = json.loads(current_path.read_text(encoding="utf-8"))
                 state["resumed_from"] = raw_id
-                current_path.write_text(json.dumps(state, ensure_ascii=False, indent=2),
-                                        encoding="utf-8")
+                current_path.write_text(
+                    json.dumps(state, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             except Exception:
                 pass
 
-        # hook: on_session_start
         ctx = SessionContext(
-            persona_id=persona_id,
+            persona_id=target.persona_id,
             style=persona_manager.get_active_style() or {},
             history=history,
             memory_scope=_get_current_memory_scope(),
         )
         await plugin_manager.dispatch("on_session_start", ctx)
 
-        logger.info("session resumed | persona=%s date=%s", persona_id, file_stem)
-        return {"status": "ok", "persona_id": persona_id,
-                "style": persona_manager.get_active_style(),
-                "memory_scope": _get_current_memory_scope()}
-
+        logger.info("session resumed | persona=%s date=%s", target.persona_id, file_stem)
+        return {
+            "status": "ok",
+            "persona_id": target.persona_id,
+            "style": persona_manager.get_active_style(),
+            "memory_scope": _get_current_memory_scope(),
+        }
 
 @app.post("/api/session/update-message")
 async def update_message(req: UpdateMessageRequest):
@@ -2739,23 +2885,20 @@ async def cancel_chat():
 
 
 @app.post("/api/chat")
-async def chat_sse(data: dict):
+async def chat_sse(req: ChatRequest):
     """SSE ストリーミングでチャット応答を返す。"""
     await _api_lock.acquire()
     try:
         _cancel_event.clear()  # この要求より後に届く停止要求だけを保持する
-        user_text = str(data.get("text", "")).strip()
-        if not user_text:
-            _api_lock.release()
-            return {"error": "empty message"}
+        user_text = req.text
 
         # DEBUG: active が空になっていないか監視
         if not persona_manager.active:
             logger.warning("chat_sse: persona_manager.active is empty! (None or '')")
 
         # persona_id 検証: 不一致なら自動でセッションを復元
-        expected_persona = str(data.get("persona_id", "")).strip()
-        expected_session = str(data.get("session_id", "")).strip()
+        expected_persona = req.persona_id
+        expected_session = req.session_id
         err = await _auto_resume_session(expected_persona, expected_session)
         if err:
             from fastapi.responses import JSONResponse
@@ -2781,7 +2924,7 @@ async def chat_sse(data: dict):
         logger.debug("user text   | %s", ctx.user_input[:80])
 
         # 履歴にユーザー発言追加（再送信の場合は既に履歴にあるのでスキップ）
-        is_resend = data.get("resend", False)
+        is_resend = req.resend
         if not is_resend:
             history.add(ctx.user_input, "")
         elif history._messages and history._messages[-1].get("role") == "user":

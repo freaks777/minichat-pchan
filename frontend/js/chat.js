@@ -260,14 +260,32 @@ function updateStatePanel(state) {
   }
   document.getElementById("state-toggle-btn").style.display = "inline-block";
 }
+
+async function requestHistory(allowResume = true) {
+  const params = new URLSearchParams({ persona_id: activePersonaId, session_id: activeSessionId });
+  const res = await fetch("/api/session/history?" + params);
+  if (res.status === 409 && allowResume) {
+    const resumeRes = await fetch("/api/session/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: activePersonaId + "/" + activeSessionId }),
+    });
+    if (resumeRes.ok) {
+      const resumeData = await resumeRes.json();
+      if (resumeData.status === "ok") return requestHistory(false);
+    }
+  }
+  return res;
+}
+
 async function loadHistory() {
   try {
-    const params = new URLSearchParams({ persona_id: activePersonaId, session_id: activeSessionId });
-    const res = await fetch("/api/session/history?" + params);
+    const res = await requestHistory();
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `history request failed: ${res.status}`);
     messageIndex = 0;
     document.getElementById("log").replaceChildren();
-    (data.messages || []).forEach((m, i) => {
+    (data.messages || []).forEach((m) => {
       addMessage(m.role, m.content, false, messageIndex++);
     });
     document.getElementById("msg-input").focus();

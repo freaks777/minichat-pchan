@@ -174,46 +174,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/frontend", StaticFiles(directory=str(BASE_DIR.parent / "frontend"), html=True), name="frontend")
 
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str          # strip後 1..8,000文字
+    persona_id: str = ""
+    session_id: str = ""  # 8桁または YYYY-MM-DD_8桁
+    resend: bool = False
+
 @app.post("/api/chat")
-async def chat_sse(request: Request):
-    """SSE (Server-Sent Events) によるチャットストリーミング。
-    v3.1 で WebSocket から SSE に移行。"""
-    touch_last_response()  # watchdog用タイムスタンプ更新
+async def chat_sse(req: ChatRequest):
+    """検証済み入力をSSEでストリーミングする。"""
+    err = await _auto_resume_session(req.persona_id, req.session_id)
+    if err:
+        return JSONResponse(status_code=409, content={"error": "session_mismatch", "detail": err})
 
     ctx = SessionContext(persona_id=..., style=..., history=...)
-    await plugin_manager.dispatch("on_session_start", ctx)
-
-    body = await request.json()
-    user_text = body.get("message", "")
-    ctx.user_input = user_text
-
-    # hook: on_user_message（watchdogリセット、secretsマスキング）
+    ctx.user_input = req.text
     ctx = await plugin_manager.dispatch("on_user_message", ctx)
-
-    history.add(ctx.user_input, "")  # secrets hook でマスク済みの入力
-    context_messages = history.get_context()
-
-    # hook: on_build_context（memoryのRAG検索注入）
-    context_messages = await plugin_manager.dispatch("on_build_context", context_messages, ctx)
-    # hook: on_before_request（最終確認）
+    if not req.resend:
+        history.add(ctx.user_input, "")
+    context_messages = await plugin_manager.dispatch("on_build_context", history.get_context(), ctx)
     context_messages = await plugin_manager.dispatch("on_before_request", context_messages, ctx)
-
-    async def event_generator():
-        try:
-            async for chunk in chat_stream(context_messages, config, model_info):
-                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except Exception as e:
-            # エラーコード化: HTTPStatusError(401)→api_key_missing 等
-            yield f"data: {json.dumps({'type': 'error', 'code': error_code})}\n\n"
-
-        history.save_turn()
-        touch_last_response()
-
-        # hook: on_response_complete
-        await plugin_manager.dispatch("on_response_complete", response_text, ctx)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(generate(), media_type="text/event-stream")
 ```
 
 コアはAPI呼び出しと履歴管理だけを知っており、具体的な処理は全てhook経由でプラグインに委譲される。
@@ -221,6 +203,10 @@ async def chat_sse(request: Request):
 エラーハンドリングは `httpx` 例外を型判定し、フロント向けにエラーコードをSSEイベントとして返す。
 `core/api.py` の共有 `httpx.AsyncClient` はFastAPI lifespanで生成・終了し、OpenAI互換・Anthropic・Googleの同期／ストリーム計6経路で接続プールを再利用する。上限は20接続、KeepAliveは10接続とし、タイムアウトは従来どおり各リクエストの設定値を適用する。ストリームレスポンスは各呼出側の `async with client.stream(...)` で確実に閉じる。
 フロントは `i18n.js` の `t(code)` で言語設定に応じたメッセージに変換する。
+
+**チャット入力境界**: `POST /api/chat`はJSON bodyを16,384 bytes以下に制限する。`text`はstrictな文字列かつstrip後1〜8,000文字、`persona_id`はpersona ID形式、`session_id`は空・8桁・`YYYY-MM-DD_8桁`、`resend`はstrictなboolとし、余分なfieldを拒否する。body超過は413、Pydantic validation違反は422、session preflight失敗は409を返す。validation完了まではAPI lock、cancel event、履歴、active session、hookを変更しない。受付後のSSE chunk/done/cancelled/error契約は維持する。
+
+**session preflightと履歴GET**: 対象personaの存在、session ID形式、full IDの存在またはshort IDの一意性、JSONLの読込可能性を副作用なしで先に解決する。成功時だけ`on_session_end`→session activation→`on_session_start`の順に進む。失敗時はactive persona、history、state、session_log、memory抽出を変更・発火させない。`GET /api/session/history`はread-onlyで、不一致は409を返す。チャットUIは409時に`POST /api/session/resume`を明示実行し、成功後のGETを1回だけ再試行する。
 
 **送信・停止UI契約**:
 
@@ -848,6 +834,8 @@ chroma:
 **運用前提**: 同一PC内・同一ユーザーアカウント内での個人利用を前提とし、ディスク上のデータ（sessions/, memory_store/, personas/, cost_log.db等）は**平文で保存する**。DBやファイルを直接覗いたり編集したりできることを優先し、暗号化によるアクセス制限は行わない。マルチユーザー環境やネットワーク越しの共有利用は想定外とする。
 
 **例外**: 上記の平文運用方針に対して、「LLM（外部API）に送信してはいけない機密情報」だけは別ルールを適用する。ローカルディスクには平文で残ってよいが、**OpenRouter API等の外部送信経路には実値を一切乗せない**ことをコードレベルで保証する。
+
+**ローカルAPIのsame-origin境界**: `/api/`配下のunsafe method（POST・PUT・PATCH・DELETE）は共通middlewareで一律検査する。request Hostはloopback（`127.0.0.1` / `localhost` / `::1`）に限定し、Originがある場合はscheme・host・portの完全一致を要求する。cross-originまたは`Sec-Fetch-Site: cross-site`は副作用前に403 `cross_origin_forbidden`で拒否する。Originを付けないローカルCLIはloopback Hostかつfetch metadataが欠落・same-origin・same-site・noneの場合だけ互換維持する。cancelや再構築を含め、副作用の軽重で例外化しない。
 
 ### 7.1.1 状態履歴と会話編集の整合性
 

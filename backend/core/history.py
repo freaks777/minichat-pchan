@@ -150,27 +150,32 @@ class History:
         self._turn_count = 0
         self._saved_message_count = 0
 
+    @staticmethod
+    def read_specific(jsonl_path: Path) -> list[dict]:
+        """Read and validate JSONL without mutating a History instance."""
+        if not jsonl_path.exists():
+            return []
+        messages: list[dict] = []
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line_number, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                msg = json.loads(line)
+                if not isinstance(msg, dict):
+                    raise ValueError(f"invalid history record at line {line_number}")
+                messages.append(msg)
+        return messages
+
+    def load_messages(self, messages: list[dict]):
+        """Replace in-memory history with already validated messages."""
+        self._messages = [dict(message) for message in messages]
+        self._turn_count = sum(1 for m in self._messages if m.get("role") == "user")
+        self._saved_message_count = len(self._messages)
+
     def _load_specific(self, jsonl_path):
         """指定されたJSONLファイルから履歴を読み込む（セッション再開用）。"""
-        self._messages = []
-        self._turn_count = 0
-        self._saved_message_count = 0
-        if not jsonl_path.exists():
-            return
-        try:
-            with open(jsonl_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    msg = json.loads(line)
-                    self._messages.append(msg)
-            self._turn_count = sum(1 for m in self._messages if m.get("role") == "user")
-            self._saved_message_count = len(self._messages)
-        except Exception:
-            # Do not disguise a corrupt history as an empty successful load.
-            # Let the caller handle the restoration failure.
-            raise
+        self.load_messages(self.read_specific(jsonl_path))
 
     def update_message(self, index: int, content: str):
         """指定インデックスのメッセージ内容を更新し、JSONLを全書き直し。"""

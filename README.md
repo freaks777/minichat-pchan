@@ -52,6 +52,13 @@ bash start_server.sh
 
 ブラウザで `http://localhost:8765` を開きます。
 
+### ローカルAPIの入力・オリジン契約
+
+- `POST /api/chat` のJSON bodyは16,384 bytes以下、`text`は前後空白除去後1〜8,000文字です。`persona_id`と`session_id`は規定形式、`resend`は真偽値だけを受け付け、余分なfieldは拒否します。
+- body超過は413、fieldの型・形式・文字数違反は422、指定sessionを安全に復元できない場合は409です。受付後の応答は従来どおりSSEです。
+- `/api/`配下のPOST・PUT・PATCH・DELETEはloopbackのsame-originだけを受け付け、cross-originは403にします。Originを送らないローカルCLIは、Hostが`127.0.0.1` / `localhost` / `::1`でcross-site指定がない場合に限り利用できます。
+- 履歴GETは状態を変更しません。表示対象がactive sessionと異なる場合、UIは明示的な`POST /api/session/resume`成功後に履歴GETを1回だけ再試行します。
+
 ### 3. 設定
 
 初回生成された`backend/config.yaml`を必要に応じて編集します。起動スクリプトを使わず手動準備する場合は、次を実行してください。

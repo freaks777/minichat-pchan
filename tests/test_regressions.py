@@ -138,6 +138,334 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertNotIn("不足分は自動生成", html + i18n)
         self.assertNotIn("auto-generated on import", i18n)
 
+class PhaseBApiBoundaryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import main as app_main
+        from fastapi.testclient import TestClient
+
+        cls.app_main = app_main
+        cls.client = TestClient(app_main.app, base_url="http://127.0.0.1:8765")
+
+    def test_chat_request_is_strict_and_bounded(self):
+        from pydantic import ValidationError
+
+        request = self.app_main.ChatRequest(
+            text="  hello  ",
+            persona_id="kyouka-detective",
+            session_id="2026-07-17_12345678",
+            resend=True,
+        )
+        self.assertEqual(request.text, "hello")
+        invalid_payloads = [
+            {"text": 123},
+            {"text": {"nested": True}},
+            {"text": "hello", "resend": "false"},
+            {"text": "hello", "resend": 1},
+            {"text": "hello", "extra": True},
+            {"text": "hello", "persona_id": "../bad"},
+            {"text": "hello", "session_id": "bad"},
+            {"text": "   "},
+            {"text": "x" * 8001},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(ValidationError):
+                self.app_main.ChatRequest(**payload)
+
+    def test_chat_body_limit_accepts_16384_and_rejects_16385_bytes(self):
+        headers = {"content-type": "application/json"}
+        accepted = self.client.post(
+            "/api/chat",
+            content=b"{" + (b" " * 16_383),
+            headers=headers,
+        )
+        self.assertEqual(accepted.status_code, 422)
+
+        rejected = self.client.post(
+            "/api/chat",
+            content=b"{" + (b" " * 16_384),
+            headers=headers,
+        )
+        self.assertEqual(rejected.status_code, 413)
+        self.assertEqual(rejected.json(), {"error": "payload_too_large"})
+
+        invalid_length = self.client.post(
+            "/api/chat",
+            content=b"{}",
+            headers={**headers, "content-length": "invalid"},
+        )
+        self.assertEqual(invalid_length.status_code, 413)
+
+        actual_body_over = self.client.post(
+            "/api/chat",
+            content=b"{" + (b" " * 16_384),
+            headers={**headers, "content-length": "16384"},
+        )
+        self.assertEqual(actual_body_over.status_code, 413)
+
+    def test_global_same_origin_guard_covers_every_unsafe_api_route(self):
+        unsafe = []
+        replacements = {
+            "plugin_name": "demo",
+            "action": "run",
+            "persona_id": "alice",
+            "date": "2026-07-17_12345678",
+        }
+        for route in self.app_main.app.routes:
+            path = getattr(route, "path", "")
+            for method in sorted(set(getattr(route, "methods", set())) & {"POST", "PUT", "PATCH", "DELETE"}):
+                if path.startswith("/api/"):
+                    unsafe.append((method, path))
+
+        self.assertEqual(len(unsafe), 39)
+        for method, path in unsafe:
+            resolved = re.sub(
+                r"\{([^}]+)\}",
+                lambda match: replacements.get(match.group(1), "value"),
+                path,
+            )
+            with self.subTest(method=method, path=path):
+                response = self.client.request(
+                    method,
+                    resolved,
+                    content=b"{}",
+                    headers={
+                        "content-type": "application/json",
+                        "origin": "https://attacker.example",
+                    },
+                )
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(response.json(), {"error": "cross_origin_forbidden"})
+
+    def test_same_origin_missing_origin_and_fetch_metadata_contract(self):
+        self.assertEqual(self.client.post("/api/chat/cancel").status_code, 200)
+        self.assertEqual(
+            self.client.post(
+                "/api/chat/cancel",
+                headers={"origin": "http://127.0.0.1:8765"},
+            ).status_code,
+            200,
+        )
+        for headers in (
+            {"origin": "null"},
+            {"origin": "http://localhost:8765"},
+            {"sec-fetch-site": "cross-site"},
+        ):
+            with self.subTest(headers=headers):
+                response = self.client.post("/api/chat/cancel", headers=headers)
+                self.assertEqual(response.status_code, 403)
+
+        from fastapi.testclient import TestClient
+        localhost = TestClient(self.app_main.app, base_url="http://localhost:8765")
+        self.assertEqual(
+            localhost.post(
+                "/api/chat/cancel",
+                headers={"origin": "http://localhost:8765"},
+            ).status_code,
+            200,
+        )
+        non_loopback = TestClient(self.app_main.app, base_url="http://example.test:8765")
+        self.assertEqual(non_loopback.post("/api/chat/cancel").status_code, 403)
+
+    def test_history_frontend_retries_resume_only_once(self):
+        source = (ROOT / "frontend" / "js" / "chat.js").read_text(encoding="utf-8")
+        self.assertIn("if (res.status === 409 && allowResume)", source)
+        self.assertEqual(source.count("return requestHistory(false)"), 1)
+        self.assertIn('fetch("/api/session/resume"', source)
+        self.assertIn("resend: !!textOverride", source)
+
+
+class PhaseBAutoResumeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import main as app_main
+        self.app_main = app_main
+
+    async def test_chat_sse_preserves_normal_and_resend_paths(self):
+        app_main = self.app_main
+
+        async def fake_chat_stream(messages, config, model_info):
+            yield "assistant reply"
+
+        async def dispatch(hook, *args):
+            if hook in {"on_build_context", "on_before_request"}:
+                return args[0]
+            return args[0] if args else None
+
+        for resend in (False, True):
+            with self.subTest(resend=resend):
+                history = mock.Mock()
+                history._messages = (
+                    [{"role": "user", "content": "hello"}] if resend else []
+                )
+                history.add.side_effect = lambda user, assistant: history._messages.extend([
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": assistant},
+                ])
+                history.get_context.side_effect = lambda: list(history._messages)
+                history.today_file = Path("session.jsonl")
+                persona_manager = mock.Mock()
+                persona_manager.active = "persona"
+                persona_manager.get_active_style.return_value = {}
+                plugin_manager = mock.Mock()
+                plugin_manager.dispatch = mock.AsyncMock(side_effect=dispatch)
+                plugin_manager.has.return_value = False
+                state_tracking = mock.Mock()
+                state_tracking.missing_count = 1
+
+                with mock.patch.object(app_main, "history", history), mock.patch.object(
+                    app_main, "persona_manager", persona_manager
+                ), mock.patch.object(app_main, "plugin_manager", plugin_manager), mock.patch.object(
+                    app_main, "chat_stream", fake_chat_stream
+                ), mock.patch.object(
+                    app_main, "_auto_resume_session", mock.AsyncMock(return_value=None)
+                ), mock.patch.object(app_main, "rebuild_system_prompt"), mock.patch.object(
+                    app_main, "_get_current_memory_scope", return_value="session"
+                ), mock.patch.object(app_main, "_state_tracking", state_tracking), mock.patch.object(
+                    app_main, "touch_last_response"
+                ), mock.patch.object(app_main, "_api_lock", asyncio.Lock()), mock.patch.object(
+                    app_main, "_cancel_event", asyncio.Event()
+                ), mock.patch.object(
+                    app_main, "config", {"active_model": "test", "active_provider": "test"}
+                ):
+                    response = await app_main.chat_sse(app_main.ChatRequest(
+                        text="hello", persona_id="persona", session_id="12345678", resend=resend,
+                    ))
+                    chunks = []
+                    async for chunk in response.body_iterator:
+                        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+                body = "".join(chunks)
+                events = [
+                    json.loads(line[6:])
+                    for line in body.splitlines()
+                    if line.startswith("data: ")
+                ]
+                content = "".join(
+                    event.get("content", "") for event in events if event.get("type") == "chunk"
+                )
+                self.assertEqual(content, "assistant reply")
+                self.assertIn('"type": "done"', body)
+                self.assertEqual(history._messages, [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "assistant reply"},
+                ])
+                if resend:
+                    history.add.assert_not_called()
+                else:
+                    history.add.assert_called_once_with("hello", "")
+
+    async def _assert_preflight_rejected(self, root: Path, persona_id: str, session_id: str):
+        app_main = self.app_main
+        current_path = root / "backend" / ".current-session"
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        current_path.write_text('{"sentinel": true}', encoding="utf-8")
+        before_state = current_path.read_bytes()
+
+        persona_manager = mock.Mock()
+        persona_manager.active = "current"
+        history = mock.Mock()
+        history.session_id = "11111111"
+        history._session_date = "2026-07-17"
+        history._messages = [{"role": "user", "content": "unchanged"}]
+        before_messages = list(history._messages)
+
+        with mock.patch.object(app_main, "BASE_DIR", root / "backend"), mock.patch.object(
+            app_main, "PERSONAS_DIR", root / "personas"
+        ), mock.patch.object(app_main, "persona_manager", persona_manager), mock.patch.object(
+            app_main, "history", history
+        ), mock.patch.object(
+            app_main, "_dispatch_session_end_for_active", mock.AsyncMock()
+        ) as end_mock, mock.patch.object(app_main, "_activate_session") as activate_mock:
+            error = await app_main._auto_resume_session(persona_id, session_id)
+
+        self.assertIsNotNone(error)
+        self.assertEqual(persona_manager.active, "current")
+        self.assertEqual(history._messages, before_messages)
+        self.assertEqual(current_path.read_bytes(), before_state)
+        end_mock.assert_not_awaited()
+        activate_mock.assert_not_called()
+
+    async def test_preflight_failures_do_not_end_or_change_current_session(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            root = Path(tmp)
+            personas = root / "personas"
+            sessions = root / "sessions"
+            (personas / "target").mkdir(parents=True)
+            (sessions / "target").mkdir(parents=True)
+
+            await self._assert_preflight_rejected(root, "../bad", "12345678")
+            await self._assert_preflight_rejected(root, "missing", "12345678")
+            await self._assert_preflight_rejected(root, "target", "bad")
+            await self._assert_preflight_rejected(root, "target", "2026-07-17_12345678")
+            await self._assert_preflight_rejected(root, "target", "12345678")
+
+            corrupt = sessions / "target" / "2026-07-17_12345678.jsonl"
+            corrupt.write_text("{broken json", encoding="utf-8")
+            await self._assert_preflight_rejected(root, "target", "2026-07-17_12345678")
+            corrupt.unlink()
+
+            for date in ("2026-07-17", "2026-07-18"):
+                (sessions / "target" / f"{date}_12345678.jsonl").write_text(
+                    '{"role":"user","content":"ok"}\n', encoding="utf-8"
+                )
+            await self._assert_preflight_rejected(root, "target", "12345678")
+
+    async def test_success_order_is_end_activate_start(self):
+        app_main = self.app_main
+        events = []
+        target = app_main._ResolvedSessionTarget(
+            persona_id="target",
+            session_id="12345678",
+            session_date="2026-07-17",
+            jsonl_path=Path("session.jsonl"),
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        persona_manager = mock.Mock()
+        persona_manager.active = "current"
+        persona_manager.get_active_style.return_value = {}
+        history = mock.Mock()
+        history.session_id = "11111111"
+        history._session_date = "2026-07-17"
+        plugin_manager = mock.Mock()
+        plugin_manager.dispatch = mock.AsyncMock(
+            side_effect=lambda hook, *args: events.append("start")
+        )
+
+        with mock.patch.object(app_main, "persona_manager", persona_manager), mock.patch.object(
+            app_main, "history", history
+        ), mock.patch.object(
+            app_main, "plugin_manager", plugin_manager
+        ), mock.patch.object(
+            app_main, "_resolve_session_target", return_value=target
+        ), mock.patch.object(
+            app_main, "_dispatch_session_end_for_active",
+            mock.AsyncMock(side_effect=lambda: events.append("end")),
+        ), mock.patch.object(
+            app_main, "_activate_session", side_effect=lambda *args, **kwargs: events.append("activate")
+        ), mock.patch.object(app_main, "_get_current_memory_scope", return_value="session"):
+            error = await app_main._auto_resume_session("target", "12345678")
+
+        self.assertIsNone(error)
+        self.assertEqual(events, ["end", "activate", "start"])
+
+    async def test_history_get_mismatch_is_read_only_409(self):
+        app_main = self.app_main
+        persona_manager = mock.Mock()
+        persona_manager.active = "current"
+        history = mock.Mock()
+        history.session_id = "11111111"
+        history._session_date = "2026-07-17"
+        history._messages = [{"role": "user", "content": "unchanged"}]
+
+        with mock.patch.object(app_main, "persona_manager", persona_manager), mock.patch.object(
+            app_main, "history", history
+        ):
+            response = await app_main.get_history("other", "2026-07-17_12345678")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(json.loads(response.body)["error"], "session_mismatch")
+        self.assertEqual(history._messages, [{"role": "user", "content": "unchanged"}])
+
 class ProviderConversionTests(unittest.TestCase):
     def test_all_system_messages_are_preserved(self):
         messages = [
@@ -1173,7 +1501,7 @@ class PluginUiTests(unittest.IsolatedAsyncioTestCase):
             '@app.post("/api/plugins/{plugin_name}/actions/{action}")',
             main_source,
         )
-        self.assertIn("if not _same_origin(request):", main_source)
+        self.assertIn("async def guard_api_requests(request: Request, call_next):", main_source)
         self.assertIn("16_384", main_source)
         self.assertIn('persona_id=persona_manager.active or ""', main_source)
         self.assertIn('data-plugin-slot="chat.toolbar"', chat_html)
@@ -2130,7 +2458,7 @@ class ChatSendStopTests(unittest.TestCase):
 
     def test_chat_cancel_event_is_not_cleared_after_preprocessing(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
-        chat_start = source.index('async def chat_sse(data: dict):')
+        chat_start = source.index('async def chat_sse(req: ChatRequest):')
         stream_start = source.index('async for chunk in chat_stream', chat_start)
         chat_source = source[chat_start:stream_start]
         clear_index = chat_source.index('_cancel_event.clear()')

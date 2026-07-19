@@ -1358,3 +1358,17 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `bootstrap.py`, `start_server.bat`, `start_server.sh`, `backend/config.default.yaml`, `backend/core/config.py`, `backend/main.py`, `frontend/studio.html`, `frontend/js/studio.js`, `frontend/js/i18n.js`, `tests/test_regressions.py`, `README.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: Phase A対象テスト10件成功、全回帰111件成功、Python構文・compileall成功、JavaScript 7ファイル構文チェック成功、pip check問題なし、標準`start_server.bat`実サーバーで主要5画面200・validate complete・既存ID import 409・config hash/mtime不変を確認、停止後port 8765解放、git diff --check問題なし
+
+### 22.36 Phase B chat/session/security契約の整合化（2026-07-18）
+
+- `POST /api/chat`をstrictな`ChatRequest`へ接続し、text 1〜8,000文字、persona/session ID形式、boolの`resend`、余分なfield拒否をPydantic validationへ統一
+- chat JSON bodyを16,384 bytes以下に制限し、超過413、field違反422、session preflight失敗409、受付後SSE維持の境界を確定
+- auto-resumeと明示resumeを対象persona/session/pathの存在・short ID一意性・JSONL読込のpreflight後にだけ`on_session_end`→activation→`on_session_start`へ進む順序へ変更
+- `GET /api/session/history`からauto-resume副作用を除去し、不一致409→UIが明示resume→GETを1回だけ再試行する契約へ変更
+- `/api/`配下のPOST・PUT・PATCH・DELETE全39 routeを共通same-origin middlewareで保護。loopback Host限定、cross-originとcross-siteを403、Origin欠落ローカルclientを条件付き互換とした
+- 通常送信・再生成のSSE実処理、16,384/16,385 bytes境界、preflight失敗時の無副作用、成功時hook順、39 route横断403を回帰テストへ追加
+- README、設計書、backlogをPhase BのAPI・UI・security契約へ同期（version体系の正規化はPhase Dへ維持）
+
+**変更ファイル**: `backend/main.py`, `backend/core/history.py`, `frontend/js/chat.js`, `tests/test_regressions.py`, `README.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: Phase B対象テスト44件成功、全回帰120件成功、Python構文・py_compile・compileall成功、JavaScript 7ファイル構文チェック成功、pip check問題なし、標準`start_server.bat`実サーバーで主要5画面200・chat validation 422・body超過413・cross-origin 403・Origin欠落200・履歴不一致409・config hash不変を確認、停止後port 8765解放、`git diff --check`問題なし
