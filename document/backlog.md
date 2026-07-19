@@ -18,8 +18,8 @@
 ### 2. 全体整合性修正
 
 1. ✅ **Phase A（P1）**: Quick Start/config/venv契約とPersona Studio import契約をQS-A + PI-Bで実装・検証・commit済み（`7c63cbf`）
-2. 🔎 **Phase B（P2-high）**: `/api/chat`入力契約、auto-resume副作用順序、mutating API same-origin統一を実装し、対象44件・全回帰120件成功（Hermes最終承認待ち）
-3. ⏳ **Phase C（P2）**: 旧session実データ確認後に互換維持またはmigration方針をユーザー判断
+2. ✅ **Phase B（P2-high）**: `/api/chat`入力契約、auto-resume副作用順序、mutating API same-origin統一を実装・検証・commit済み（`72964c4`）
+3. ✅ **Phase C（P2）**: 旧session実データ0件を確認し、互換保証撤回・migrationなしへ文書契約を訂正。対象3件・全回帰123件成功、Hermes最終承認済み
 4. ⏳ **Phase D（P2/P3）**: version体系、README・設計書・CHANGELOG、debug tool、未使用コード、State Tracking通しテストを整理
 
 P2 セッション削除とMemory DBの整合性はPhase 0〜4（一覧、schema/内部API、session削除、persona_base、persona削除）まで完了。

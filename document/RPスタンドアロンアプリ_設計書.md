@@ -140,12 +140,14 @@ F:\LLM\hermes-work\rp-standalone\
 │
 ├── sessions/                       # 会話履歴（ペルソナ別）
 │   └── {persona_id}/
-│       └── YYYY-MM-DD.jsonl
+│       └── YYYY-MM-DD_HHMMSSRR.jsonl
 │
 ├── session-log/                    # 会話ログ（Markdown、ペルソナ別）
 ├── document/                       # 設計書
 └── .last-response
 ```
+
+**セッションファイル契約**: 会話履歴の正規形式は`sessions/{persona_id}/YYYY-MM-DD_HHMMSSRR.jsonl`だけとする。session一覧、resume、delete、Memoryの正本session判定はこの形式だけを扱う。旧`YYYY-MM-DD.jsonl`は未対応で、runtime互換・migration・自動削除を提供しない。過去の互換維持記述は実装事実と不一致だったためPhase Cで撤回した。
 
 コアのみで動かす場合、`backend/core/` `backend/main.py` `backend/plugins/base.py` `backend/plugins/plugin_manager.py` があれば成立する。**ペルソナ切替はコアの責務**として扱う（後述3.3.1）。
 

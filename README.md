@@ -151,11 +151,13 @@ Untested providers have no guarantee of working. The code path exists and should
 
 | データ | 保存先 | 形式 |
 |---|---|---|
-| 会話履歴 | `sessions/*.jsonl` | JSONL |
+| 会話履歴 | `sessions/{persona_id}/YYYY-MM-DD_HHMMSSRR.jsonl` | JSONL |
 | 会話ログ | `session-log/*.md` | Markdown |
 | 長期記憶 | ChromaDB（`chroma.path`） | ベクトルDB |
 | 機密情報 | `data/secrets_store.json` | JSON |
 | ペルソナ | `personas/*/` | Markdown + YAML |
+
+会話履歴の対応形式は`YYYY-MM-DD_HHMMSSRR.jsonl`だけです。旧`YYYY-MM-DD.jsonl`は互換・migration対象ではありません。アプリは旧形式を一覧・再開・削除せず、起動時の自動migrationや自動削除も行いません。
 
 ChromaDB の保存先と埋め込みモデルは `config.yaml` の `chroma` セクションで変更可能。
 

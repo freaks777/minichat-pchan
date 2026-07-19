@@ -138,6 +138,44 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertNotIn("不足分は自動生成", html + i18n)
         self.assertNotIn("auto-generated on import", i18n)
 
+class PhaseCLegacySessionContractTests(unittest.TestCase):
+    def test_runtime_session_apis_accept_only_canonical_filenames(self):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn(
+            're.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}\.jsonl", f.name)',
+            source,
+        )
+        self.assertIn(
+            're.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", file_stem)',
+            source,
+        )
+        self.assertIn(
+            're.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{8}", date)',
+            source,
+        )
+        self.assertNotIn('YYYY-MM-DD.jsonl', source)
+
+    def test_documents_withdraw_legacy_compatibility_without_migration(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        design = (
+            ROOT / "document" / "RPスタンドアロンアプリ_設計書.md"
+        ).read_text(encoding="utf-8")
+        changelog = (ROOT / "document" / "CHANGELOG.md").read_text(encoding="utf-8")
+        backlog = (ROOT / "document" / "backlog.md").read_text(encoding="utf-8")
+
+        self.assertIn("YYYY-MM-DD_HHMMSSRR.jsonl", readme)
+        self.assertIn("互換・migration対象ではありません", readme)
+        self.assertIn("runtime互換・migration・自動削除を提供しない", design)
+        self.assertIn("旧session互換保証の撤回", changelog)
+        self.assertIn("互換保証撤回・migrationなし", backlog)
+        self.assertNotIn("_load_latest()", readme + design)
+
+    def test_phase_c_adds_no_automatic_legacy_data_mutation(self):
+        bootstrap = (ROOT / "bootstrap.py").read_text(encoding="utf-8")
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertNotIn("YYYY-MM-DD.jsonl", bootstrap + source)
+        self.assertNotIn("legacy session migration", bootstrap.lower() + source.lower())
+
 class PhaseBApiBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

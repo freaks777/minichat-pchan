@@ -1372,3 +1372,16 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `backend/main.py`, `backend/core/history.py`, `frontend/js/chat.js`, `tests/test_regressions.py`, `README.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: Phase B対象テスト44件成功、全回帰120件成功、Python構文・py_compile・compileall成功、JavaScript 7ファイル構文チェック成功、pip check問題なし、標準`start_server.bat`実サーバーで主要5画面200・chat validation 422・body超過413・cross-origin 403・Origin欠落200・履歴不一致409・config hash不変を確認、停止後port 8765解放、`git diff --check`問題なし
+
+### 22.37 Phase C 旧session互換保証の撤回（2026-07-20）
+
+- §11.1の「旧`YYYY-MM-DD.jsonl`も互換維持」という記述は、初期実装からlist・resume・deleteが新形式だけを扱っており、実装事実と一致していなかったため撤回
+- workspaceの`sessions/`と`session-log/`をread-onlyで確認し、旧形式・新形式ともに実データ0件を確認
+- ユーザー判断により旧形式のruntime互換、migration tool、移行手順を提供しない
+- 正規形式を`sessions/{persona_id}/YYYY-MM-DD_HHMMSSRR.jsonl`だけに確定
+- 起動時の自動migration・自動削除は追加せず、runtime codeとユーザーデータは変更しない
+- 未使用`History._load_latest()`の整理はPhase Dの未使用コード監査へ継続
+
+**変更ファイル**: `README.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`, `tests/test_regressions.py`
+
+**確認結果**: Phase C対象3件成功、正本`requirements.txt`を解決したuv隔離環境で全回帰123件成功、Python構文・compileall成功、JavaScript 7ファイル構文チェック成功、隔離環境のpip check問題なし、session file 0件・port 8765解放・`git diff --check`問題なし。既存system/workspace Pythonには依存version driftがあるため変更せず、隔離環境で正本契約を検証
