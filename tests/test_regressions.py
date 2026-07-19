@@ -227,6 +227,44 @@ class PhaseDADocumentContractTests(unittest.TestCase):
             changelog.replace("\r\n", "\n"),
         )
 
+class PhaseDBVersionContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.design = (
+            ROOT / "document" / "RPスタンドアロンアプリ_設計書.md"
+        ).read_text(encoding="utf-8")
+        cls.changelog = (ROOT / "document" / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_design_title_and_last_updated_version_are_v311(self):
+        self.assertTrue(self.design.startswith("# RPスタンドアロンアプリ 設計書 v3.11"))
+        self.assertIn("最終更新: 2026-07-20 (v3.11)", self.design)
+
+    def test_design_does_not_claim_unrecorded_v314(self):
+        self.assertNotIn("v3.14", self.design)
+
+    def test_changelog_documents_v_a_and_duplicate_history(self):
+        self.assertIn("現行versionはv3.11", self.changelog)
+        self.assertIn("§13と§14はいずれもv3.3開始時の記録", self.changelog)
+        self.assertIn("§20と§21は同一v3.10系列の後続変更記録", self.changelog)
+
+    def test_historical_changelog_headings_are_preserved(self):
+        for heading in (
+            "## 13. v3.3 CharacterData 中心設計",
+            "## 14. v3.3 セッション管理・状態追跡",
+            "## 20. v3.10 OpenAI互換APIストリーム処理改善",
+            "## 21. v3.10 設定API検証 + 属性エスケープ",
+            "## 22. v3.11 機密情報UI 全面実装",
+        ):
+            self.assertIn(heading, self.changelog)
+
+    def test_changelog_does_not_invent_v312_to_v314_release_chapters(self):
+        for version in ("v3.12", "v3.13", "v3.14"):
+            self.assertIsNone(
+                re.search(rf"^## \d+\. {re.escape(version)}(?:\s|$)", self.changelog, re.MULTILINE)
+            )
+
 class PhaseBApiBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
