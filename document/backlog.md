@@ -20,13 +20,13 @@
 1. ✅ **Phase A（P1）**: Quick Start/config/venv契約とPersona Studio import契約をQS-A + PI-Bで実装・検証・commit済み（`7c63cbf`）
 2. ✅ **Phase B（P2-high）**: `/api/chat`入力契約、auto-resume副作用順序、mutating API same-origin統一を実装・検証・commit済み（`72964c4`）
 3. ✅ **Phase C（P2）**: 旧session実データ0件を確認し、互換保証撤回・migrationなしへ文書契約を訂正。対象3件・全回帰123件成功、Hermes最終承認済み
-4. 🔎 **Phase D（P2/P3）**: 全体文書・version・保守性を段階的に整理
+4. ✅ **Phase D（P2/P3）**: 全体文書・version・保守性を段階的に整理し、実装・検証・commit完了
    - ✅ D-a 文書事実同期: 実装・検証・commit済み（`e9b2053`）
    - ✅ D-b version体系V-A（現行v3.11）: 実装・検証・commit済み（`f2de80b`）
    - ✅ D-c 依存drift検知: 実装・検証・commit済み（`3175c4e`）
    - ✅ D-d 未使用・非推奨コード整理: 実装・検証・commit済み（`b46ba1e`）
-   - ✅ D-e State Tracking実ファイル通しテスト: 実装・検証完了
-   - ✅ D-f 最終UIスモーク修正: 実装・全回帰・隔離DB登録・実ブラウザ検証完了
+   - ✅ D-e State Tracking実ファイル通しテスト: 実装・検証・commit済み（`7017a9f`）
+   - ✅ D-f 最終UIスモーク修正: 実装・全回帰・隔離DB登録・実ブラウザ検証・commit済み（`44434e6`）
 
 P2 セッション削除とMemory DBの整合性はPhase 0〜4（一覧、schema/内部API、session削除、persona_base、persona削除）まで完了。
 P4 Persona Studio保存後の表示維持は完了。保存後も編集結果と操作領域を維持し、保存済み一覧だけを更新する。
