@@ -54,6 +54,7 @@ function renderSessions(sessions) {
     const turns = document.createElement('span');
     const actions = document.createElement('div');
     const continueBtn = document.createElement('button');
+    const editBtn = document.createElement('button');
     const newBtn = document.createElement('button');
     const deleteBtn = document.createElement('button');
 
@@ -81,6 +82,10 @@ function renderSessions(sessions) {
     continueBtn.dataset.i18n = 'btnContinue';
     continueBtn.textContent = t('btnContinue');
     continueBtn.addEventListener('click', () => continueSession(String(s.id ?? '')));
+    editBtn.className = 'btn btn-secondary btn-sm';
+    editBtn.dataset.i18n = 'btnEdit';
+    editBtn.textContent = t('btnEdit');
+    editBtn.addEventListener('click', () => editSession(String(s.id ?? '')));
     newBtn.className = 'btn btn-primary btn-sm';
     newBtn.dataset.i18n = 'btnNewWith';
     newBtn.textContent = t('btnNewWith');
@@ -89,7 +94,7 @@ function renderSessions(sessions) {
     deleteBtn.dataset.i18n = 'btnDelete';
     deleteBtn.textContent = t('btnDelete');
     deleteBtn.addEventListener('click', () => deleteSession(String(s.id ?? '')));
-    actions.append(continueBtn, newBtn, deleteBtn);
+    actions.append(continueBtn, editBtn, newBtn, deleteBtn);
 
     card.append(main, meta, actions);
     listEl.appendChild(card);
@@ -119,7 +124,7 @@ function escapeHtml(str) {
 
 let _continueLock = false;
 
-async function continueSession(sessionId) {
+async function resumeSessionTo(sessionId, destination) {
   if (_continueLock) return;
   _continueLock = true;
   try {
@@ -134,11 +139,19 @@ async function continueSession(sessionId) {
       _continueLock = false;
       return;
     }
-    location.href = '/chat';
+    location.href = destination;
   } catch (err) {
     alert('接続エラー: ' + err.message);
     _continueLock = false;
   }
+}
+
+function continueSession(sessionId) {
+  return resumeSessionTo(sessionId, '/chat');
+}
+
+function editSession(sessionId) {
+  return resumeSessionTo(sessionId, '/chat?edit=1');
 }
 
 function startNewSession(personaId) {

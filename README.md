@@ -165,7 +165,7 @@ Untested providers have no guarantee of working. The code path exists and should
 
 会話履歴の対応形式は`YYYY-MM-DD_HHMMSSRR.jsonl`だけです。旧`YYYY-MM-DD.jsonl`は互換・migration対象ではありません。アプリは旧形式を一覧・再開・削除せず、起動時の自動migrationや自動削除も行いません。
 
-ChromaDB の保存先と埋め込みモデルは `config.yaml` の `chroma` セクションで変更可能。Memoryレコードはmetadataの`kind`で`session_fact`（会話由来）、`persona_base`（SOUL.md / SKILL.md / style.yaml由来）、`legacy`（kind未設定の旧レコード）を区別します。
+ChromaDB の保存先と埋め込みモデルは `config.yaml` の `chroma` セクションで変更可能。起動時は埋め込みproviderだけを準備し、DBはMemory API・検索・保存を初めて使う時に開きます。診断・隔離テストではプロセス環境変数 `RP_CHROMA_PATH` が `chroma.path` より優先され、設定ファイルを変更せず別DBを利用できます。Memoryレコードはmetadataの`kind`で`session_fact`（会話由来）、`persona_base`（SOUL.md / SKILL.md / style.yaml由来）、`legacy`（kind未設定の旧レコード）を区別します。
 
 ## API Debug Dump
 

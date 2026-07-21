@@ -449,7 +449,9 @@ async function startEdit(msgDiv) {
   textEl.appendChild(ta);
   ta.focus();
 
+  let editSaveInProgress = false;
   const save = async () => {
+    if (editSaveInProgress) return;
     const newContent = ta.value;
     if (newContent === orig) { restore(); return; }
     const originalSecrets = secretPlaceholders(orig);
@@ -459,6 +461,7 @@ async function startEdit(msgDiv) {
       ta.focus();
       return;
     }
+    editSaveInProgress = true;
     try {
       const res = await fetch("/api/session/update-message", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -509,6 +512,8 @@ async function startEdit(msgDiv) {
       }
     } catch (err) {
       alert("通信エラー: " + err.message); restore();
+    } finally {
+      editSaveInProgress = false;
     }
   };
 

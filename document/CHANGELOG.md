@@ -1428,3 +1428,18 @@ DOM挿入監査で確認したF1〜F3を修正。
 **変更ファイル**: `tests/test_regressions.py`, `document/CHANGELOG.md`, `document/backlog.md`
 
 **確認結果**: Phase D-e対象11件（実ファイル統合4件 + 既存State Tracking 7件）成功、修復済み専用venvで全回帰152件成功、Python構文・compileall成功、JavaScript 7ファイル構文チェック成功、`git diff --check`問題なし
+
+### 22.41 Phase D-f 最終UIスモーク修正（2026-07-21）
+
+- Studioタブを`data-studio-tab`で特定し、CSP移行後に残っていたinline handler文字列selector依存を解消
+- Chatのユーザー発言編集に保存中guardを追加し、Ctrl+Enterが誘発するblurとの再入によるupdate/truncate二重実行を防止
+- Sessionsに独立した「編集」操作を追加し、resume preflight後に`/chat?edit=1`へ遷移。狭幅では4操作を折り返す
+- MemoryのChromaDB接続を初回管理・検索・保存操作まで遅延し、通常の画面巡回だけでユーザーDBを開かない境界へ変更
+- 診断・隔離テスト用の`RP_CHROMA_PATH`を追加し、`config.yaml`を変更せず標準起動processだけ別DBへ向けられるようにした
+- `shutdown()`でChroma clientの`close()`を呼び、SQLite/HNSW file handleを確実に解放
+- 実ChromaDBでテスト事実の登録、正規化重複排除、切断後の再接続、metadata-only stats/records復元を回帰テスト化
+- 主要5画面へCSP互換data URI faviconを追加し、ブラウザの`/favicon.ico` 404ノイズを解消
+
+**確認結果**: 全回帰160件成功、Python/JavaScript構文・compileall・requirements照合・`uv pip check`成功。実ChromaDBで登録→切断→再接続→重複排除を確認し、標準`start_server.bat` + Google Chrome headless（1440x900 / 390x844）で主要5画面、Chat送信/編集/再生成/停止、Studio抽出→生成/validate 3状態、Settings Memory表示/確認dialog、CSP/XSS/console/network/layoutを確認。外部LLM・mutating APIは未実行
+
+**変更ファイル**: `backend/main.py`, `backend/plugins/memory/plugin.py`, `frontend/index.html`, `frontend/session-setup.html`, `frontend/sessions.html`, `frontend/settings.html`, `frontend/studio.html`, `frontend/js/chat.js`, `frontend/js/sessions.js`, `frontend/js/studio.js`, `frontend/css/style.css`, `tests/test_regressions.py`, `README.md`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`

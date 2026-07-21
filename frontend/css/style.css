@@ -576,6 +576,7 @@ label { font-size: 14px; color: var(--text-muted); }
 
 .session-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 4px;
 }

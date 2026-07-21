@@ -25,7 +25,8 @@
    - ✅ D-b version体系V-A（現行v3.11）: 実装・検証・commit済み（`f2de80b`）
    - ✅ D-c 依存drift検知: 実装・検証・commit済み（`3175c4e`）
    - ✅ D-d 未使用・非推奨コード整理: 実装・検証・commit済み（`b46ba1e`）
-   - 🔎 D-e State Tracking実ファイル通しテスト: 実装・検証中
+   - ✅ D-e State Tracking実ファイル通しテスト: 実装・検証完了
+   - ✅ D-f 最終UIスモーク修正: 実装・全回帰・隔離DB登録・実ブラウザ検証完了
 
 P2 セッション削除とMemory DBの整合性はPhase 0〜4（一覧、schema/内部API、session削除、persona_base、persona削除）まで完了。
 P4 Persona Studio保存後の表示維持は完了。保存後も編集結果と操作領域を維持し、保存済み一覧だけを更新する。

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -105,6 +106,8 @@ class MemoryPlugin(PluginBase):
         self._embedding_provider = None     # EmbeddingProvider
         self._chroma_client = None          # chromadb.PersistentClient
         self._collection = None             # chromadb.Collection
+        self._chroma_path = None
+        self._init_lock = threading.Lock()
         self._config = None                 # API設定（事実抽出用）
 
     def configure(
@@ -117,17 +120,36 @@ class MemoryPlugin(PluginBase):
         self._embedding_provider = embedding_provider
         self._config = config
 
-        import chromadb
-        self._chroma_client = chromadb.PersistentClient(path=chroma_path)
-        self._collection = self._chroma_client.get_or_create_collection(
-            name="rp_memory",
-            metadata={"hnsw:space": "cosine"},
-        )
+        self._chroma_path = chroma_path
         logger.info(
-            "memory: ChromaDB ready (dim=%d, path=%s)",
+            "memory: configured for lazy ChromaDB open (dim=%d, path=%s)",
             self._embedding_provider.dimension,
             chroma_path,
         )
+
+    def ensure_ready(self) -> bool:
+        """Open ChromaDB only when a memory operation actually needs it."""
+        if self._collection is not None:
+            return True
+        if self._embedding_provider is None or not self._chroma_path:
+            return False
+        with self._init_lock:
+            if self._collection is not None:
+                return True
+            import chromadb
+            client = chromadb.PersistentClient(path=self._chroma_path)
+            collection = client.get_or_create_collection(
+                name="rp_memory",
+                metadata={"hnsw:space": "cosine"},
+            )
+            self._chroma_client = client
+            self._collection = collection
+            logger.info(
+                "memory: ChromaDB ready (dim=%d, path=%s)",
+                self._embedding_provider.dimension,
+                self._chroma_path,
+            )
+        return True
 
     async def run(self, hook: str, data, ctx):
         if hook == "on_session_end":
@@ -148,8 +170,12 @@ class MemoryPlugin(PluginBase):
 
         if self._chroma_client is not None:
             try:
+                client = self._chroma_client
                 self._collection = None
                 self._chroma_client = None
+                close = getattr(client, "close", None)
+                if callable(close):
+                    await asyncio.to_thread(close)
                 import gc
                 gc.collect()
                 logger.info("memory: ChromaDB connection released")
@@ -160,7 +186,7 @@ class MemoryPlugin(PluginBase):
 
     async def _on_session_end(self, ctx):
         """会話終了時に重要事実を抽出して保存。"""
-        if self._collection is None or self._config is None:
+        if self._embedding_provider is None or self._config is None:
             logger.warning("memory: not configured, skipping save")
             return
 
@@ -221,6 +247,9 @@ class MemoryPlugin(PluginBase):
         """同一セッションの既存文書を除外し、新規事実だけを保存する。"""
         if not persona_id or not session_id:
             logger.error("memory: persona_id and session_id are required")
+            return 0
+        if not self.ensure_ready():
+            logger.error("memory: not configured, skipping save")
             return 0
         existing_documents = []
         where = {"$and": [
@@ -291,7 +320,7 @@ class MemoryPlugin(PluginBase):
         """確定済みpersonaファイルから派生索引を置換構築する。"""
         if not persona_id:
             raise ValueError("persona_id is required")
-        if self._collection is None or self._embedding_provider is None:
+        if self._embedding_provider is None or not self.ensure_ready():
             raise RuntimeError("memory_unavailable")
 
         source_hash, sources, documents = _persona_base_documents(Path(persona_dir))
@@ -330,7 +359,7 @@ class MemoryPlugin(PluginBase):
     # ── 管理 ──────────────────────────────────────────────────
 
     async def _matching_records(self, where: dict | None = None) -> tuple[list[str], list[dict]]:
-        if self._collection is None:
+        if not self.ensure_ready():
             return [], []
         kwargs = {"include": ["metadatas"]}
         if where is not None:
@@ -457,11 +486,10 @@ class MemoryPlugin(PluginBase):
 
     async def _on_build_context(self, messages: list[dict], ctx):
         """ユーザー入力から類似記憶を検索し、システムプロンプトに注入。"""
-        if self._collection is None:
-            return messages
-
         user_input = ctx.user_input
         if not user_input or len(user_input) < 3:
+            return messages
+        if not self.ensure_ready():
             return messages
 
         try:

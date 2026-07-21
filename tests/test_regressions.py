@@ -2026,6 +2026,13 @@ class PhaseDDMaintenanceContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("/api/persona-studio/convert-freetext", self.studio_source)
         self.assertNotIn("notImplemented", self.sessions_source)
 
+    def test_studio_tabs_use_data_attributes_without_inline_handler_lookup(self):
+        html = (ROOT / "frontend" / "studio.html").read_text(encoding="utf-8")
+        for tab_id in ("template", "file", "saved"):
+            self.assertIn(f'data-studio-tab="{tab_id}"', html)
+        self.assertIn('button[data-studio-tab=', self.studio_source)
+        self.assertNotIn('button[onclick*=', self.studio_source)
+
     def test_compatibility_endpoint_is_deprecated_in_openapi(self):
         operation = self.app_main.app.openapi()["paths"][
             "/api/persona-studio/convert-freetext"
@@ -2153,6 +2160,99 @@ class MemoryDeduplicationTests(unittest.IsolatedAsyncioTestCase):
             fact_id("persona", "session-a", unique[0]),
             fact_id("persona", "session-b", unique[0]),
         )
+
+    def test_runtime_chroma_path_can_be_isolated_without_config_mutation(self):
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'os.environ.get("RP_CHROMA_PATH") or chroma_cfg.get("path", "./data/chroma")',
+            source,
+        )
+        self.assertIn("ChromaDB deferred", source)
+
+    def test_configure_defers_chroma_open_until_first_memory_operation(self):
+        plugin = MemoryPlugin()
+        embedding = mock.MagicMock()
+        embedding.dimension = 384
+        client = mock.MagicMock()
+        collection = mock.MagicMock()
+        client.get_or_create_collection.return_value = collection
+        with mock.patch("chromadb.PersistentClient", return_value=client) as persistent:
+            plugin.configure(embedding, "isolated-chroma", {"api": {}})
+            persistent.assert_not_called()
+            self.assertIsNone(plugin._collection)
+            self.assertTrue(plugin.ensure_ready())
+            self.assertTrue(plugin.ensure_ready())
+        persistent.assert_called_once_with(path="isolated-chroma")
+        client.get_or_create_collection.assert_called_once_with(
+            name="rp_memory",
+            metadata={"hnsw:space": "cosine"},
+        )
+        self.assertIs(plugin._collection, collection)
+
+    async def test_shutdown_closes_chroma_client(self):
+        plugin = MemoryPlugin()
+        plugin._embedding_provider = mock.MagicMock()
+        plugin._collection = mock.MagicMock()
+        plugin._chroma_client = mock.MagicMock()
+        client = plugin._chroma_client
+
+        await plugin.shutdown()
+
+        client.close.assert_called_once_with()
+        self.assertIsNone(plugin._collection)
+        self.assertIsNone(plugin._chroma_client)
+        self.assertIsNone(plugin._embedding_provider)
+
+    async def test_real_chroma_registration_survives_reconnect_and_deduplicates(self):
+        class FixedEmbedding:
+            dimension = 384
+
+            def encode(self, texts):
+                return [[float(index == 0) for index in range(self.dimension)] for _ in texts]
+
+            def unload(self):
+                return None
+
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            first = MemoryPlugin()
+            first.configure(FixedEmbedding(), tmp, {"api": {}})
+            stored = await first._store_facts(
+                ["ユーザーは紅茶が好きである", "・ ユーザーは紅茶が好きである"],
+                "smoke-persona",
+                "12345678",
+            )
+            self.assertEqual(stored, 1)
+            self.assertEqual(
+                await first.stats({("smoke-persona", "12345678")}),
+                {
+                    "total": 1,
+                    "by_kind": {
+                        MEMORY_KIND_SESSION_FACT: 1,
+                        MEMORY_KIND_PERSONA_BASE: 0,
+                        MEMORY_KIND_LEGACY: 0,
+                    },
+                    "by_persona": {"smoke-persona": 1},
+                    "orphan_session_facts": 0,
+                },
+            )
+            await first.shutdown()
+
+            reopened = MemoryPlugin()
+            reopened.configure(FixedEmbedding(), tmp, {"api": {}})
+            records = await reopened.preview_records({("smoke-persona", "12345678")})
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["kind"], MEMORY_KIND_SESSION_FACT)
+            self.assertFalse(records[0]["orphan"])
+            self.assertEqual(
+                await reopened._store_facts(
+                    ["1. ユーザーは紅茶が好きである"],
+                    "smoke-persona",
+                    "12345678",
+                ),
+                0,
+            )
+            self.assertEqual((await reopened.stats())["total"], 1)
+            await reopened.shutdown()
 
     async def test_store_facts_excludes_legacy_and_batch_duplicates(self):
         collection = mock.MagicMock()
@@ -2805,6 +2905,15 @@ class SessionListContractTests(unittest.TestCase):
         )
 
 
+    def test_session_list_offers_distinct_resume_edit_and_delete_actions(self):
+        source = (ROOT / "frontend" / "js" / "sessions.js").read_text(encoding="utf-8")
+        css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
+        self.assertIn("actions.append(continueBtn, editBtn, newBtn, deleteBtn);", source)
+        self.assertIn("function editSession(sessionId)", source)
+        self.assertIn("return resumeSessionTo(sessionId, '/chat?edit=1');", source)
+        self.assertIn("return resumeSessionTo(sessionId, '/chat');", source)
+        self.assertIn("flex-wrap: wrap;", css)
+
 class ChatSendStopTests(unittest.TestCase):
     def test_send_button_is_the_single_send_stop_control(self):
         html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
@@ -2826,6 +2935,17 @@ class ChatSendStopTests(unittest.TestCase):
         self.assertIn('setComposerStreaming(false);', source)
         self.assertIn('if (!controller || cancelling) return;', source)
         self.assertIn('fetch("/api/chat/cancel", { method: "POST" })', source)
+
+    def test_edit_save_is_guarded_against_ctrl_enter_blur_reentry(self):
+        source = (ROOT / "frontend" / "js" / "chat.js").read_text(encoding="utf-8")
+        edit_start = source.index("async function startEdit(msgDiv)")
+        edit_end = source.index("async function regenerate(msgDiv)", edit_start)
+        edit_source = source[edit_start:edit_end]
+        self.assertIn("let editSaveInProgress = false;", edit_source)
+        self.assertIn("if (editSaveInProgress) return;", edit_source)
+        self.assertIn("editSaveInProgress = true;", edit_source)
+        self.assertIn("finally {", edit_source)
+        self.assertIn("editSaveInProgress = false;", edit_source)
 
     def test_chat_cancel_event_is_not_cleared_after_preprocessing(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
@@ -3435,6 +3555,11 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertIn("#state-panel { padding: 8px 10px; max-height: min(40vh, 240px); }", compact)
 
 class CspPolicyTests(unittest.TestCase):
+    def test_all_pages_define_a_csp_compatible_favicon(self):
+        for name in ("index.html", "session-setup.html", "sessions.html", "settings.html", "studio.html"):
+            html = (ROOT / "frontend" / name).read_text(encoding="utf-8")
+            self.assertEqual(html.count('<link rel="icon" href="data:image/svg+xml,'), 1)
+
     def test_enforced_policy_and_report_endpoint_are_configured(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 

@@ -147,12 +147,13 @@ async def lifespan(app: FastAPI):
             chroma_cfg.get("embedding_model", "intfloat/multilingual-e5-small"),
             cache_folder=chroma_cfg.get("embedding_cache"),
         )
+        chroma_path = os.environ.get("RP_CHROMA_PATH") or chroma_cfg.get("path", "./data/chroma")
         plugin_manager.get("memory").configure(
             embedding_provider=embedding,
-            chroma_path=chroma_cfg.get("path", "./data/chroma"),
+            chroma_path=chroma_path,
             config=config,
         )
-        logger.info("memory: embedding provider + ChromaDB ready")
+        logger.info("memory: embedding provider ready; ChromaDB deferred (path=%s)", chroma_path)
 
     init_http_client()
     logger.info("HTTP client ready")
@@ -1615,7 +1616,11 @@ def _memory_management_plugin():
     if not plugin_manager.has("memory"):
         return None
     plugin = plugin_manager.get("memory")
-    return plugin if getattr(plugin, "_collection", None) is not None else None
+    try:
+        return plugin if plugin.ensure_ready() else None
+    except Exception as e:
+        logger.error("memory initialization failed: %s", e)
+        return None
 
 
 async def _index_persona_base(persona_id: str) -> dict:

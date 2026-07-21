@@ -214,7 +214,7 @@ async def chat_sse(req: ChatRequest):
 **送信・停止UI契約**:
 
 - 入力欄右端は単一の `send-btn` とし、通常時は「送信」、SSE応答中は同じ位置・同じ要素を「停止」へ切り替える。別位置の停止ボタンは置かない
-- 通常送信、再生成、ユーザー発言編集後の再送信はすべて `send()` を通り、正規化開始から応答完了までbusy guardで二重送信を拒否する
+- 通常送信、再生成、ユーザー発言編集後の再送信はすべて `send()` を通り、正規化開始から応答完了までbusy guardで二重送信を拒否する。編集保存はCtrl+Enterで発生するblurとの再入を専用guardで拒否し、update/truncateを1回だけ実行する
 - 応答中のsend-btnは入力・機密挿入を無効化したまま停止操作だけを受け付け、停止要求の多重送信を拒否する
 - 停止は `/api/chat/cancel` でサーバーへ通知し、部分応答を履歴へ保存する猶予後、上流が応答しない場合だけAbortControllerで接続を中断する
 - success、API error、通信error、中断のすべてを共通finallyで通常の送信状態へ戻す
@@ -697,7 +697,7 @@ style:
 **ポート**: 8765（`python main.py` → `uvicorn.run(app, host="127.0.0.1", port=8765)`）。
 **設定リセット**: `/api/config/reset` は `config.default.yaml` をコピーする方式。コード内にデフォルト値を重複管理しない。
 **ログ**: `RotatingFileHandler`（1MB×2世代）。長期運用でのログ肥大化を防止。 Windowsの標準CP932コンソールでも診断を失わないよう、loggerの固定メッセージにはCP932で表現できる区切り文字を使用する。
-**フロントエンドURL**: クリーンURLで提供（`/sessions`, `/chat`, `/setup`, `/settings`, `/studio`）。`FileResponse` で `frontend/` 配下のHTMLを直接配信。CSS/JSは `/frontend/` マウントで従来通り。
+**フロントエンドURL**: クリーンURLで提供（`/sessions`, `/chat`, `/setup`, `/settings`, `/studio`）。`FileResponse` で `frontend/` 配下のHTMLを直接配信。CSS/JSは `/frontend/` マウントで従来通り。各HTMLはdata URI faviconを宣言し、未定義`/favicon.ico`の404を発生させない。Sessionsは「続き」から`/chat`、「編集」から`/chat?edit=1`へ同じresume preflight後に遷移し、狭幅では操作ボタンを折り返す。
 **共通ナビバー**: 全ページ上部に固定ナビバー（`#top-nav`）。`[セッション] [Studio] [設定] [EN/日本語]`。現在地は `.active` でハイライト。ページ間の戻るボタンは不要。
 
 ---
@@ -751,8 +751,8 @@ watchdog:
 - hooks: `on_build_context`（ユーザー入力→埋め込み→類似検索→システムプロンプトに注入）, `on_session_end`（会話履歴→LLMで事実抽出→埋め込み→ChromaDB保存）
 - priority: 50（コンテキスト構築の先頭で注入）
 - critical: False
-- `configure()`: `EmbeddingProvider` + ChromaDB `PersistentClient` + API設定の注入。`main.py` の lifespan で配線
-- `shutdown()`: ChromaDB参照・embedding provider を解放
+- `configure()`: `EmbeddingProvider` + ChromaDB path + API設定を注入し、`PersistentClient`は開かない。Memory API・検索・保存の初回操作でlock下の`ensure_ready()`が遅延生成する。`main.py` の lifespan で配線
+- `shutdown()`: ChromaDB clientの`close()`を呼んでSQLite/HNSW file handleを解放し、参照・embedding providerも解放
 - 非同期化: 埋め込み生成・検索とChromaDBの `get()` / `query()` / `upsert()` を `asyncio.to_thread()` でラップし、イベントループブロックを防止
 - 事実抽出: 直近6000文字の会話からLLMが重要事実を抽出（`conversation[-6000:]`）
 - 重複抑制: 同一ペルソナ・同一セッション内で、NFKC正規化・先頭の箇条書き／番号除去・空白統一後に完全一致する事実を保存しない。抽出結果内の重複と旧ID形式の既存文書も照合対象とする
@@ -767,7 +767,7 @@ watchdog:
 - 障害境界: importは3ファイル不足・空・不正形式を422で拒否する。完成persona確定後のMemory未設定またはembedding/ChromaDB障害はpersona本体の成功へ波及させず、`warning.resource=persona_base` と再構築可能フラグを返す。`POST /api/memory/personas/{persona_id}/rebuild` で確定ファイルから再構築できる
 - 管理API: `GET /api/memory/stats`、`GET /api/memory/orphans`、`GET /api/memory/records` はdocument/embeddingを返さずmetadataだけを扱う。`POST /api/memory/delete` は `all` / `persona` / `session` / `records` / `orphans` scopeを厳密検証し、API lock内で削除する
 - 管理画面: SettingsのMemory DBタブでkind/persona/session/孤児統計、metadata一覧・filter、選択/persona/session/孤児/全件削除を提供する。削除前に対象件数を確認し、完了後は統計と一覧を再読込する
-- 設定: `config.yaml` の `chroma` セクション（`path`, `embedding_model`, `embedding_cache`）
+- 設定: `config.yaml` の `chroma` セクション（`path`, `embedding_model`, `embedding_cache`）。診断・隔離テスト用のプロセス環境変数`RP_CHROMA_PATH`が指定された場合だけ`path`より優先する
 
 ```yaml
 # config.yaml
@@ -792,7 +792,7 @@ chroma:
 
 **目的**: SOUL.md/SKILL.md/style.yamlの作成・編集をアプリ内で完結させる。
 
-**UI構成**（オーバーレイ方式）:
+**UI構成**（オーバーレイ方式）: タブは`data-studio-tab`と`addEventListener()`で対応付け、inline handler文字列をselectorとして検索しない。
 - メイン: フォーム入力（全幅、中央寄せ700px）
 - エディタ: 全画面オーバーレイ、SOUL.md/SKILL.mdをタブ切替で1つずつ全幅表示
 - テスト会話: 全画面オーバーレイ、チャットログ＋入力欄

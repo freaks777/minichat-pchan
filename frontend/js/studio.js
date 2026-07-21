@@ -274,7 +274,7 @@ function escapeHtml(str) {
 function switchTab(id) {
   document.querySelectorAll(".tab-row button").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-  document.querySelector(`.tab-row button[onclick*="${id}"]`).classList.add("active");
+  document.querySelector(`.tab-row button[data-studio-tab="${id}"]`).classList.add("active");
   document.getElementById("tab-" + id).classList.add("active");
   if (id === "saved") loadSavedPersonas();
 }
