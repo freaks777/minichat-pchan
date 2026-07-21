@@ -1415,3 +1415,16 @@ DOM挿入監査で確認したF1〜F3を修正。
 - 同APIのrequest/response、same-origin、切断検知契約は維持し、v3.12計画時に利用状況を再監査して保持・削除を判断
 
 **変更ファイル**: `backend/core/history.py`, `backend/main.py`, `frontend/js/studio.js`, `frontend/js/sessions.js`, `document/RPスタンドアロンアプリ_設計書.md`, `document/CHANGELOG.md`, `document/backlog.md`, `tests/test_regressions.py`
+
+### 22.40 Phase D-e State Tracking実ファイル通しテスト（2026-07-21）
+
+- runtimeを変更せず、外部LLM・plugin hookだけをmockした実ファイル統合テスト4件を追加
+- SOUL.md seedから`_state.json` / `_state_history.jsonl`を作り、チャンク境界を跨ぐSTATE抽出、merge、SSE、History JSONL保存を通しで検証
+- 2turnのsnapshotをtruncateし、fresh Historyと`_activate_session()`でresumeしてstate復元を検証
+- assistant編集時に編集対象より前のseed snapshotへ戻り、未来snapshotを切り詰める契約を検証
+- 新形式JSONLにstate sidecarがないlegacy fallbackでは既存stateをresume時に保持し、最初の履歴変更後に通常契約へ移行することを検証
+- fixtureは`.test-tmp`内だけを使用し、workspaceのsession/persona/dataを変更しない
+
+**変更ファイル**: `tests/test_regressions.py`, `document/CHANGELOG.md`, `document/backlog.md`
+
+**確認結果**: Phase D-e対象11件（実ファイル統合4件 + 既存State Tracking 7件）成功、修復済み専用venvで全回帰152件成功、Python構文・compileall成功、JavaScript 7ファイル構文チェック成功、`git diff --check`問題なし

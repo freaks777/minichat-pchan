@@ -3021,6 +3021,232 @@ class SessionDeleteLifecycleTests(unittest.TestCase):
         self.assertIn("await loadSessions();", frontend)
 
 
+class StateTrackingFileFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import main as app_main
+
+        self.app_main = app_main
+        self.temp = tempfile.TemporaryDirectory(dir=TEST_TMP)
+        self.root = Path(self.temp.name)
+        self.base_dir = self.root / "backend"
+        self.base_dir.mkdir()
+        self.personas_dir = self.root / "personas"
+        self.sessions_dir = self.root / "sessions"
+        self.persona_dir = self.personas_dir / "alice"
+        self.persona_dir.mkdir(parents=True)
+        (self.persona_dir / "SOUL.md").write_text(
+            "# Alice\n\n## 開始時の状況\nseed room",
+            encoding="utf-8",
+        )
+        (self.persona_dir / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+        (self.persona_dir / "style.yaml").write_text(
+            "style:\n  viewpoint: ai_character\n  person: first\n  narration: true\n",
+            encoding="utf-8",
+        )
+
+        self.persona_manager = PersonaManager(
+            self.personas_dir,
+            "alice",
+            default_style={
+                "viewpoint": "ai_character",
+                "person": "first",
+                "narration": True,
+            },
+        )
+        self.persona_manager.switch("alice")
+        self.persona_manager.start_session()
+        self.history = History(self.sessions_dir, "alice")
+        self.history.set_session_id("12345678", "2026-07-21")
+
+        async def dispatch(hook, *args):
+            if hook in ("on_user_message", "on_build_context", "on_before_request"):
+                return args[0]
+            return None
+
+        self.plugin_manager = mock.MagicMock()
+        self.plugin_manager.dispatch = mock.AsyncMock(side_effect=dispatch)
+        self.plugin_manager.has.return_value = False
+
+        self.patchers = [
+            mock.patch.object(app_main, "BASE_DIR", self.base_dir),
+            mock.patch.object(app_main, "PERSONAS_DIR", self.personas_dir),
+            mock.patch.object(app_main, "sessions_dir", self.sessions_dir),
+            mock.patch.object(app_main, "persona_manager", self.persona_manager),
+            mock.patch.object(app_main, "history", self.history),
+            mock.patch.object(app_main, "plugin_manager", self.plugin_manager),
+            mock.patch.object(app_main, "_api_lock", asyncio.Lock()),
+            mock.patch.object(app_main, "_cancel_event", asyncio.Event()),
+            mock.patch.object(app_main, "rebuild_system_prompt"),
+            mock.patch.object(app_main, "touch_last_response"),
+            mock.patch.object(
+                app_main, "_auto_resume_session", mock.AsyncMock(return_value=None)
+            ),
+            mock.patch.object(app_main, "_protect_secret_data", side_effect=lambda text: text),
+            mock.patch.object(
+                app_main,
+                "config",
+                {"active_model": "test", "active_provider": "test"},
+            ),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        app_main._state_tracking.reset()
+
+    async def asyncTearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp.cleanup()
+
+    @property
+    def state_path(self):
+        return self.sessions_dir / "alice" / "12345678_state.json"
+
+    @property
+    def snapshot_path(self):
+        return self.sessions_dir / "alice" / "12345678_state_history.jsonl"
+
+    def read_state(self):
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+    def read_snapshots(self):
+        return [
+            json.loads(line)
+            for line in self.snapshot_path.read_text(encoding="utf-8").splitlines()
+        ]
+
+    async def chat(self, text, response_chunks):
+        async def stream(messages, config, model_info):
+            for chunk in response_chunks:
+                yield chunk
+
+        with mock.patch.object(self.app_main, "chat_stream", stream):
+            response = await self.app_main.chat_sse(
+                self.app_main.ChatRequest(
+                    text=text,
+                    persona_id="alice",
+                    session_id="12345678",
+                )
+            )
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    async def test_seed_sse_conversation_and_snapshot_use_real_files(self):
+        seed = self.app_main._seed_initial_state()
+        self.assertEqual(seed, {"開始時の状況": "seed room"})
+
+        events = await self.chat(
+            "hello",
+            ["visible reply---STA", "TE---\n- place: room\n"],
+        )
+
+        self.assertEqual(
+            self.read_state(),
+            {"開始時の状況": "seed room", "place": "room"},
+        )
+        snapshots = self.read_snapshots()
+        self.assertEqual([item["message_count"] for item in snapshots], [0, 2])
+        self.assertEqual(snapshots[-1]["state"]["place"], "room")
+        self.assertNotIn("---STATE---", events)
+        self.assertNotIn("- place: room", events)
+        self.assertIn('"type": "state"', events)
+        self.assertIn('"type": "done"', events)
+        self.assertEqual(self.history._messages[-1]["content"], "visible reply")
+        self.assertNotIn("---STATE---", self.history.session_file.read_text(encoding="utf-8"))
+        self.assertEqual(self.app_main._state_tracking.missing_count, 0)
+
+    async def test_multiple_turns_truncate_and_resume_restore_snapshot(self):
+        self.app_main._seed_initial_state()
+        await self.chat("first", ["first reply\n---STATE---\n- place: room\n"])
+        await self.chat("second", ["second reply\n---STATE---\n- place: hall\n"])
+        self.assertEqual(
+            [item["message_count"] for item in self.read_snapshots()],
+            [0, 2, 4],
+        )
+
+        result = await self.app_main.truncate_history(
+            self.app_main.TruncateRequest(
+                from_index=2,
+                persona_id="alice",
+                session_id="12345678",
+            )
+        )
+        self.assertEqual(result["state"]["place"], "room")
+        self.assertEqual(self.read_state()["place"], "room")
+        self.assertEqual(
+            [item["message_count"] for item in self.read_snapshots()],
+            [0, 2],
+        )
+
+        resumed = History(self.sessions_dir, "alice")
+        self.app_main.history = resumed
+        self.app_main._activate_session(
+            "alice",
+            "12345678",
+            self.history.session_file,
+            "2026-07-21",
+        )
+        self.assertEqual(len(resumed._messages), 2)
+        self.assertEqual(self.read_state()["place"], "room")
+        self.assertEqual(
+            [item["message_count"] for item in self.read_snapshots()],
+            [0, 2],
+        )
+
+    async def test_assistant_edit_restores_seed_and_prunes_future_snapshot(self):
+        self.app_main._seed_initial_state()
+        await self.chat("hello", ["reply\n---STATE---\n- place: room\n"])
+
+        result = await self.app_main.update_message(
+            self.app_main.UpdateMessageRequest(
+                index=1,
+                content="edited reply",
+                persona_id="alice",
+                session_id="12345678",
+            )
+        )
+
+        self.assertEqual(result["state"], {"開始時の状況": "seed room"})
+        self.assertEqual(self.read_state(), {"開始時の状況": "seed room"})
+        self.assertEqual(
+            [item["message_count"] for item in self.read_snapshots()],
+            [0],
+        )
+        rows = History.read_specific(self.history.session_file)
+        self.assertEqual(rows[1]["content"], "edited reply")
+
+    async def test_resume_without_sidecar_preserves_state_until_history_changes(self):
+        self.history.add("hello", "reply")
+        self.history.save_turn(force=True)
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(
+            json.dumps({"legacy": "kept"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        self.assertFalse(self.snapshot_path.exists())
+
+        resumed = History(self.sessions_dir, "alice")
+        self.app_main.history = resumed
+        self.app_main._activate_session(
+            "alice",
+            "12345678",
+            self.history.session_file,
+            "2026-07-21",
+        )
+        self.assertEqual(self.read_state(), {"legacy": "kept"})
+        self.assertFalse(self.snapshot_path.exists())
+
+        result = await self.app_main.truncate_history(
+            self.app_main.TruncateRequest(
+                from_index=1,
+                persona_id="alice",
+                session_id="12345678",
+            )
+        )
+        self.assertEqual(result["state"], {})
+        self.assertFalse(self.state_path.exists())
+
 class StateHistoryContractTests(unittest.TestCase):
     def test_state_snapshots_follow_history_edits(self):
         source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
